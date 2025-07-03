@@ -23,7 +23,7 @@ const getUserSession = async (phoneNumber) => {
 const updateUserSession = async (phoneNumber, updates) => {
   try {
     console.log(`Updating session for ${phoneNumber}`, updates);
-    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', updates);
+    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'get', updates);
     return session;
   } catch (error) {
     console.error('Error updating session:', error.response?.data || error.message);
