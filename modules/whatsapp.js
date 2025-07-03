@@ -1,5 +1,4 @@
 // server.js - WhatsApp related functions section
-const axios = require('axios');
 
 const { 
   WHATSAPP_TOKEN, 
@@ -68,33 +67,22 @@ const sendListMessage = async (to, header, body, sections) => {
 
 const downloadWhatsAppMedia = async (mediaId) => {
   try {
-    // Get media URL from WhatsApp API
-    const mediaResponse = await apiRequest(
-      `https://graph.facebook.com/v18.0/${mediaId}`, 
-      'GET'
-    );
-    
-    if (!mediaResponse || !mediaResponse.url) {
-      throw new Error('Invalid media response from WhatsApp API');
-    }
+    // Get media URL from WhatsApp
+    const mediaResponse = await apiRequest(`https://graph.facebook.com/v18.0/${mediaId}`, 'GET');
     
     // Download the actual media
-    const mediaBuffer = await apiRequest(
-      mediaResponse.url,
-      'GET',
-      null,
-      { responseType: 'arraybuffer' }
-    );
+    const mediaBuffer = await apiRequest(mediaResponse.data.url, 'GET', null, {
+      responseType: 'arraybuffer'
+    });
     
     return {
-      buffer: Buffer.from(mediaBuffer),
-      size: mediaBuffer.byteLength,
-      contentType: mediaResponse.mime_type,
-      url: mediaResponse.url
+      buffer: Buffer.from(mediaBuffer.data),
+      size: mediaBuffer.data.byteLength,
+      contentType: mediaResponse.data.mime_type
     };
   } catch (error) {
-    console.error('Error downloading media:', error.response?.data || error.message);
-    throw new Error(`Failed to download media: ${error.message}`);
+    console.error('Error downloading media:', error);
+    throw error;
   }
 };
 
