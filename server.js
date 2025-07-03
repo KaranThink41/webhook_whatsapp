@@ -1,8 +1,15 @@
-// server.js - Updated to integrate with Django backend
+// server.js - Main application entry point
 const express = require('express');
-const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
+const axios = require('axios');
+const { 
+  WHATSAPP_TOKEN, 
+  WHATSAPP_PHONE_NUMBER_ID, 
+  WEBHOOK_VERIFY_TOKEN, 
+  DJANGO_BASE_URL, 
+  WHATSAPP_API_URL 
+} = require('./modules/config');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,484 +18,59 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Configuration
-const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || 'your_whatsapp_access_token';
-const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || 'your_phone_number_id';
-const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'WkLp!9x#Zq7$Hj2@Mv_d';
-const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL || 'http://localhost:8000/api/pharmacy';
-const WHATSAPP_API_URL = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
+// Import API utilities
+const { apiRequest } = require('./utils/api');
 
-// --- Django API Helper Functions ---
-const apiRequest = async (endpoint, method = 'GET', data = null) => {
-  try {
-    const config = {
-      method,
-      url: `${DJANGO_BASE_URL}${endpoint}`,
-      headers: {
-        'Content-Type': 'application/json',
-      }
-    };
-    
-    if (data) {
-      config.data = data;
-    }
-    
-    const response = await axios(config);
-    return response.data;
-  } catch (error) {
-    console.error(`API Request Error (${endpoint}):`, error.response?.data || error.message);
-    throw error;
-  }
-};
+// Make apiRequest available globally for other modules
+global.apiRequest = apiRequest;
 
-// Session management with Django backend
-const getUserSession = async (phoneNumber) => {
-  try {
-    console.log(`Getting session for ${phoneNumber}`);
-    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
-    return session;
-  } catch (error) {
-    if (error.response?.status === 404) {
-      // Create new session if not found
-      const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
-        current_step: 'start',
-        context_data: {}
-      });
-      return newSession;
-    }
-    throw error;
-  }
-};
+// Import session management
+const { getUserSession, updateUserSession } = require('./modules/session');
 
-const updateUserSession = async (phoneNumber, updates) => {
-  try {
-    console.log(`Updating session for ${phoneNumber}`, updates);
-    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', updates);
-    return session;
-  } catch (error) {
-    console.error('Error updating session:', error);
-    throw error;
-  }
-};
+// Import modules
+const {
+  getCategories,
+  getMedicinesByCategory,
+  searchMedicines,
+  getMedicineById,
+  handleBrowseCategories,
+  handleCategorySelection,
+  handleMedicineSearch,
+  handleMedicineSelection,
+  handleViewCart,
+  handleAddToCart,
+  handleClearCart,
+  handleCheckout
+} = require('./modules/medicine');
 
-// Customer management
-const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
-  try {
-    const customer = await apiRequest(`/api/customers/${phoneNumber}/`);
-    return customer;
-  } catch (error) {
-    if (error.response?.status === 404) {
-      // Create new customer
-      const customerData = {
-        phone_number: phoneNumber,
-        ...additionalData
-      };
-      const newCustomer = await apiRequest(`/api/customers/${phoneNumber}/`, 'POST', customerData);
-      return newCustomer;
-    }
-    throw error;
-  }
-};
+const {
+  getUserOrders,
+  createQuickOrder,
+  handleCheckoutWithPrescription,
+  handleDeliveryDetails,
+  handleOrderCompletion,
+  handleTrackOrder
+} = require('./modules/orders');
 
-// Medicine and catalog functions
-const getCategories = async () => {
-  try {
-    const response = await apiRequest('/api/categories/');
-    // Handle different possible response formats
-    if (Array.isArray(response)) {
-      return response; // If response is already an array
-    } else if (response && Array.isArray(response.results)) {
-      return response.results; // If response has a results array (common in paginated APIs)
-    } else if (response && response.data && Array.isArray(response.data)) {
-      return response.data; // If response has a data array
-    }
-    console.warn('Unexpected categories format:', response);
-    return [];
-  } catch (error) {
-    console.error('Error fetching categories:', error);
-    return [];
-  }
-};
+const {
+  getNearbyPharmacies,
+  uploadPrescription,
+  handleFindPharmacy,
+  handlePharmacyLocation,
+  handleLocationInput
+} = require('./modules/pharmacy');
 
-const getMedicinesByCategory = async (categoryId) => {
-  try {
-    const response = await apiRequest(`/api/medicines/?category=${categoryId}`);
-    
-    // Handle different possible response formats
-    if (Array.isArray(response)) {
-      return response; // If response is already an array
-    } else if (response && Array.isArray(response.results)) {
-      return response.results; // If response has a results array (common in paginated APIs)
-    } else if (response && response.data && Array.isArray(response.data)) {
-      return response.data; // If response has a data array
-    }
-    
-    console.warn('Unexpected medicines by category format:', response);
-    return [];
-  } catch (error) {
-    console.error('Error fetching medicines by category:', error);
-    return [];
-  }
-};
+const {
+  sendWhatsAppMessage,
+  sendTextMessage,
+  sendInteractiveMessage,
+  sendListMessage,
+  downloadWhatsAppMedia
+} = require('./modules/whatsapp');
 
-const searchMedicines = async (query, limit = 10) => {
-  try {
-    const medicines = await apiRequest(`/api/medicines/search/?q=${encodeURIComponent(query)}&limit=${limit}`);
-    return medicines;
-  } catch (error) {
-    console.error('Error searching medicines:', error);
-    return [];
-  }
-};
+const { getOrCreateCustomer } = require('./modules/customer');
 
-const getMedicineById = async (medicineId) => {
-  try {
-    const medicine = await apiRequest(`/api/medicines/${medicineId}/`);
-    return medicine;
-  } catch (error) {
-    console.error('Error fetching medicine by ID:', error);
-    return null;
-  }
-};
 
-// Order management
-const getUserOrders = async (phoneNumber) => {
-  try {
-    console.log(`Fetching orders for phone: ${phoneNumber}`);
-    const orders = await apiRequest(`/api/orders/customer/${phoneNumber}/`);
-    console.log('Fetched orders:', JSON.stringify(orders, null, 2));
-    return Array.isArray(orders) ? orders : [];
-  } catch (error) {
-    console.error('Error fetching user orders:', error);
-    if (error.response) {
-      console.error('Error response:', {
-        status: error.response.status,
-        data: error.response.data,
-        headers: error.response.headers
-      });
-    }
-    return [];
-  }
-};
-
-const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) => {
-  try {
-    const customer = await getOrCreateCustomer(phoneNumber);
-    
-    // Get the first pharmacy based on delivery address
-    const deliveryAddress = additionalData.delivery_address || {};
-    const pharmacies = await getNearbyPharmacies(deliveryAddress.city, deliveryAddress.pincode);
-    const pharmacyId = pharmacies.length > 0 ? pharmacies[0].id : null;
-    
-    if (!pharmacyId) {
-      throw new Error('No pharmacy available to fulfill this order');
-    }
-    
-    const orderData = {
-      customer_phone: phoneNumber,
-      pharmacy_id: pharmacyId,
-      medicines: orderItems.map(item => ({
-        medicine_id: item.medicine_id || item.id,
-        quantity: item.quantity || 1,
-        prescription_file: item.prescription_file || null
-      })),
-      ...additionalData
-    };
-    
-    console.log('Creating order with data:', orderData);
-    const order = await apiRequest('/api/orders/quick-create/', 'POST', orderData);
-    return order;
-  } catch (error) {
-    console.error('Error creating order:', error);
-    throw error;
-  }
-};
-
-// Pharmacy functions
-// const getNearbyPharmacies = async (city = null, pincode = null) => {
-//   try {
-//     const params = new URLSearchParams();
-//     if (city) params.append('city', city);
-//     if (pincode) params.append('pincode', pincode);
-    
-//     const queryString = params.toString();
-//     const endpoint = `/pharmacies/nearby/${queryString ? '?' + queryString : ''}`;
-    
-//     const pharmacies = await apiRequest(endpoint);
-//     return pharmacies;
-//   } catch (error) {
-//     console.error('Error fetching nearby pharmacies:', error);
-//     return [];
-//   }
-// };
-const getNearbyPharmacies = async (city = null, pincode = null) => {
-    try {
-      const params = new URLSearchParams();
-      if (city) params.append('city', city);
-      if (pincode) params.append('pincode', pincode);
-      
-      const response = await apiRequest(`/api/pharmacies/nearby/?${params.toString()}`);
-      return response;
-    } catch (error) {
-      console.error('Error fetching pharmacies:', error);
-      
-      // For testing - return a test pharmacy if none found
-      // Remove this in production
-      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
-        console.log('Returning test pharmacy for development');
-        return [{
-          id: 'test-pharmacy-1',
-          name: 'Test Pharmacy',
-          address: '123 Test St, Test City',
-          phone: '+1234567890',
-          pincodes: ['110001', '110002', '110003'], // Add test pincodes here
-          is_active: true
-        }];
-      }
-      
-      throw error;
-    }
-  };
-
-// Prescription upload (you'll need to implement file storage)
-const uploadPrescription = async (fileBuffer, fileName, phoneNumber) => {
-  try {
-    // This is a simplified version - you'll need to implement actual file upload
-    // to your Django backend's media storage
-    console.log(`Uploading prescription for ${phoneNumber} - ${fileName}`);
-    
-    // For now, return a mock response - implement actual upload to Django
-    const mockPublicUrl = `${DJANGO_BASE_URL}/media/prescriptions/${phoneNumber}/${fileName}`;
-    return {
-      path: `prescriptions/${phoneNumber}/${fileName}`,
-      publicUrl: mockPublicUrl,
-      fileName: fileName
-    };
-  } catch (error) {
-    console.error('Error uploading prescription:', error);
-    throw error;
-  }
-};
-
-// WhatsApp API helper functions (unchanged)
-const sendWhatsAppMessage = async (to, message) => {
-  try {
-    const response = await axios.post(
-      WHATSAPP_API_URL,
-      {
-        messaging_product: "whatsapp",
-        to: to,
-        ...message
-      },
-      {
-        headers: {
-          'Authorization': `Bearer ${WHATSAPP_TOKEN}`,
-          'Content-Type': 'application/json'
-        }
-      }
-    );
-    return response.data;
-  } catch (error) {
-    console.error('Error sending WhatsApp message:', error.response?.data || error.message);
-  }
-};
-
-const sendTextMessage = async (to, text) => {
-  return sendWhatsAppMessage(to, {
-    type: "text",
-    text: { body: text }
-  });
-};
-
-const sendInteractiveMessage = async (to, header, body, buttons) => {
-  return sendWhatsAppMessage(to, {
-    type: "interactive",
-    interactive: {
-      type: "button",
-      header: { type: "text", text: header },
-      body: { text: body },
-      action: {
-        buttons: buttons.map((btn, index) => ({
-          type: "reply",
-          reply: {
-            id: btn.id,
-            title: btn.title
-          }
-        }))
-      }
-    }
-  });
-};
-
-const sendListMessage = async (to, header, body, sections) => {
-  return sendWhatsAppMessage(to, {
-    type: "interactive",
-    interactive: {
-      type: "list",
-      header: { type: "text", text: header },
-      body: { text: body },
-      action: {
-        button: "Select Option",
-        sections: sections
-      }
-    }
-  });
-};
-
-const downloadWhatsAppMedia = async (mediaId) => {
-  try {
-    // Get media URL from WhatsApp
-    const mediaResponse = await axios.get(`https://graph.facebook.com/v18.0/${mediaId}`, {
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
-      }
-    });
-    
-    // Download the actual media
-    const mediaBuffer = await axios.get(mediaResponse.data.url, {
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
-      },
-      responseType: 'arraybuffer'
-    });
-    
-    return {
-      buffer: Buffer.from(mediaBuffer.data),
-      size: mediaBuffer.data.byteLength,
-      contentType: mediaResponse.data.mime_type
-    };
-  } catch (error) {
-    console.error('Error downloading media:', error);
-    throw error;
-  }
-};
-
-// Helper function for handling checkout with prescription
-async function handleCheckoutWithPrescription(phoneNumber, session, prescriptionPath) {
-  const cart = session.context_data.cart || [];
-  
-  if (cart.length === 0) {
-    await sendTextMessage(phoneNumber, "Your cart is empty. Add some medicines first!");
-    return;
-  }
-  
-  // Prepare order items
-  const orderItems = cart.map(item => ({
-    medicine_id: item.medicine_id,
-    quantity: item.quantity,
-    prescription_file: item.requires_prescription ? prescriptionPath : null
-  }));
-  
-  try {
-    // Get customer details including address
-    const customer = await getOrCreateCustomer(phoneNumber);
-    
-    // Create order with delivery address
-    const order = await createQuickOrder(phoneNumber, orderItems, {
-      delivery_address: {
-        address: customer.address,
-        city: customer.city, // Make sure city is saved in customer details
-        pincode: customer.pincode,
-        landmark: customer.landmark
-      }
-    });
-    
-    // Clear cart after successful order
-    await updateUserSession(phoneNumber, {
-      current_step: 'browse_medicines',
-      context_data: { cart: [] }
-    });
-    
-    // Send order confirmation
-    await sendTextMessage(phoneNumber, 
-      `✅ Order placed successfully!\n\n` +
-      `📋 Order ID: ${order.order_id}\n` +
-      `💰 Total: ₹${order.total_amount}\n\n` +
-      `Your order will be processed within 2 hours.`
-    );
-    
-    await sendInteractiveMessage(phoneNumber, "Next Steps", "What would you like to do next?", [
-      { id: "track_order", title: "Track Order" },
-      { id: "browse_categories", title: "Continue Shopping" },
-      { id: "main_menu", title: "Main Menu" }
-    ]);
-    
-  } catch (error) {
-    console.error('Checkout error:', error);
-    
-    // More detailed error message
-    let errorMessage = "❌ Failed to place order.\n\n";
-    
-    if (error.response) {
-      // The request was made and the server responded with a status code
-      // that falls out of the range of 2xx
-      console.error('Error response data:', error.response.data);
-      console.error('Error status:', error.response.status);
-      console.error('Error headers:', error.response.headers);
-      
-      errorMessage += `Error: ${error.response.status} - ${error.response.statusText}\n`;
-      if (error.response.data) {
-        if (typeof error.response.data === 'object') {
-          errorMessage += `Details: ${JSON.stringify(error.response.data, null, 2)}`;
-        } else {
-          errorMessage += `Details: ${error.response.data}`;
-        }
-      }
-    } else if (error.request) {
-      // The request was made but no response was received
-      console.error('Error request:', error.request);
-      errorMessage += "The server did not respond. Please check your internet connection and try again.";
-    } else {
-      // Something happened in setting up the request that triggered an Error
-      console.error('Error message:', error.message);
-      errorMessage += `Error: ${error.message}`;
-    }
-    
-    // Send the detailed error message to the user
-    await sendTextMessage(phoneNumber, errorMessage);
-    
-    // Also log the full error for debugging
-    console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    
-    // If there's a specific error about missing address, guide the user
-    if (error.message && (error.message.includes('address') || error.message.includes('pincode'))) {
-      await sendTextMessage(phoneNumber, 
-        "\n\nIt looks like we're missing your delivery address. " +
-        "Please update your address and try again. You can update it by sending: \n\n" +
-        "*Update Address*\n[Your Complete Address]\n[City]\n[Pincode]\n[Landmark (optional)]"
-      );
-    }
-  }
-}
-
-// Helper function for handling delivery details
-async function handleDeliveryDetails(phoneNumber, session) {
-  await updateUserSession(phoneNumber, {
-    current_step: 'awaiting_delivery_details',
-    context_data: {
-      ...session.context_data,
-      checkout_in_progress: true
-    }
-  });
-  
-  await sendTextMessage(phoneNumber,
-    "🚚 *Delivery Details*\n\n" +
-    "Please provide your delivery details in the following format:\n\n" +
-    "1. Full Name\n" +
-    "2. Complete Address\n" +
-    "3. Pincode\n" +
-    "4. Landmark (Optional)\n\n" +
-    "Example:\n" +
-    "John Doe\n" +
-    "123 Main St, Apartment 4B\n" +
-    "400001\n" +
-    "Near City Mall"
-  );
-  
-  await sendInteractiveMessage(phoneNumber, "Delivery Details", "You can also:", [
-    { id: "cancel_checkout", title: "❌ Cancel Checkout" }
-  ]);
-}
 
 // Main message handler - Updated to use Django backend
 const handleIncomingMessage = async (from, message) => {
@@ -522,27 +104,8 @@ const handleIncomingMessage = async (from, message) => {
           prescription_file: uploadResult.path
         }];
         
-        const order = await createQuickOrder(from, orderItems);
-        
-        // Update session
-        await updateUserSession(from, {
-          current_step: 'browse_medicines',
-          context_data: {}
-        });
-        
-        await sendTextMessage(from, 
-          `✅ Prescription received and *${medicine.name}* ordered successfully!\n\n` +
-          `📋 Order ID: ${order.order_id}\n` +
-          `💰 Total: ₹${order.total_amount}\n\n` +
-          `Your order will be processed within 2 hours.`
-        );
+        await handleOrderCompletion(from, session, orderItems);
       }
-      
-      await sendInteractiveMessage(from, "Next Action", "What would you like to do?", [
-        { id: "browse_categories", title: "Browse Categories" },
-        { id: "track_order", title: "Track Orders" },
-        { id: "main_menu", title: "Main Menu" }
-      ]);
       
       return;
     }
@@ -585,242 +148,44 @@ const handleIncomingMessage = async (from, message) => {
       return;
     }
 
-    // Handle Browse Categories
-    if (messageText === 'browse categories') {
-      const categories = await getCategories();
-      
-      if (categories.length === 0) {
-        await sendTextMessage(from, "Sorry, no categories available at the moment.");
-        return;
-      }
-      
-      await updateUserSession(from, { 
-        current_step: 'browse_categories',
-        context_data: {}
-      });
-      
-      // Ensure categories is an array before processing
-      if (!Array.isArray(categories)) {
-        console.error('Categories is not an array:', categories);
-        categories = [];
-      }
-      
-      const sections = [{
-        title: "Medicine Categories",
-        rows: categories.slice(0, 10).map(category => ({
-          id: `cat_${category.id}`,
-          title: category.name || 'Unnamed Category',
-          description: (category.description || `Browse ${category.name || 'category'} medicines`).substring(0, 72) // Limit description length
-        }))
-      }];
-      
-      await sendListMessage(from, 
-        "🏥 Medicine Categories", 
-        "Select a category to browse medicines:",
-        sections
-      );
+    // Handle Browse Categories - both direct command and interactive button
+    if (messageText === 'browse categories' || 
+        (message.interactive?.button_reply?.id && message.interactive.button_reply.id === 'browse_categories')) {
+      await handleBrowseCategories(from);
       return;
     }
 
     // Handle category selection
-    if (messageText.startsWith('cat_') || (message.interactive?.list_reply?.id && message.interactive.list_reply.id.startsWith('cat_'))) {
-      // Extract category ID from either direct message or interactive message
-      const categoryId = messageText.startsWith('cat_') 
-        ? messageText.replace('cat_', '')
-        : message.interactive.list_reply.id.replace('cat_', '');
-        
-      const medicines = await getMedicinesByCategory(categoryId);
-      
-      if (medicines.length === 0) {
-        await sendTextMessage(from, "Sorry, no medicines available in this category.");
-        return;
-      }
-      
-      await updateUserSession(from, {
-        current_step: 'browse_medicines',
-        context_data: { current_category: categoryId }
-      });
-      
-      const sections = [{
-        title: "Available Medicines",
-        rows: medicines.slice(0, 10).map(medicine => ({
-          id: `med_${medicine.id}`,
-          title: medicine.name,
-          description: `₹${medicine.mrp} ${medicine.prescription_type === 'RX' ? '(Rx Required)' : ''}`
-        }))
-      }];
-      
-      await sendListMessage(from, 
-        "💊 Available Medicines", 
-        "Select a medicine to add to cart:",
-        sections
-      );
-      
-      await sendInteractiveMessage(from, "Category Options", "What would you like to do next?", [
-        { id: "browse_categories", title: "Change Category" },
-        { id: "search_medicines", title: "Search Medicines" },
-        { id: "main_menu", title: "Main Menu" }
-      ]);
+    if (message.interactive?.list_reply?.id?.startsWith('cat_')) {
+      await handleCategorySelection(from, message);
       return;
     }
 
     // Handle medicine selection
     if (messageText.startsWith('med_') || 
         (message.interactive?.list_reply?.id && message.interactive.list_reply.id.startsWith('med_'))) {
-      // Extract medicine ID from either direct message or interactive message
-      const medicineId = messageText.startsWith('med_') 
-        ? messageText.replace('med_', '')
-        : message.interactive.list_reply.id.replace('med_', '');
-        
-      const medicine = await getMedicineById(medicineId);
-      
-      if (!medicine) {
-        await sendTextMessage(from, "Sorry, medicine not found.");
-        return;
-      }
-      
-      // Initialize cart if it doesn't exist
-      if (!session.context_data.cart) {
-        session.context_data.cart = [];
-      }
-      
-      // Add medicine to cart
-      const existingItemIndex = session.context_data.cart.findIndex(item => item.medicine_id === medicineId);
-      
-      if (existingItemIndex >= 0) {
-        // Update quantity if already in cart
-        session.context_data.cart[existingItemIndex].quantity += 1;
-      } else {
-        // Add new item to cart
-        session.context_data.cart.push({
-          medicine_id: medicineId,
-          name: medicine.name,
-          price: medicine.mrp,
-          quantity: 1,
-          requires_prescription: medicine.prescription_type === 'RX'
-        });
-      }
-      
-      await updateUserSession(from, {
-        current_step: 'browse_medicines',
-        context_data: session.context_data
-      });
-      
-      // Show cart options
-      await sendInteractiveMessage(from, "🛒 Cart Updated", 
-        `✅ Added *${medicine.name}* to your cart.\n\n` +
-        `What would you like to do next?`,
-        [
-          { id: "view_cart", title: "🛒 View Cart" },
-          { id: "browse_categories", title: "Continue Shopping" },
-          { id: "checkout", title: "Proceed to Checkout" }
-        ]
-      );
+      await handleMedicineSelection(from, message, session);
       return;
     }
     
     // Handle view cart - both direct command and interactive button
     if (messageText === 'view cart' || 
         (message.interactive?.button_reply?.id && message.interactive.button_reply.id === 'view_cart')) {
-      const cart = session.context_data.cart || [];
-      
-      if (cart.length === 0) {
-        await sendTextMessage(from, "Your cart is empty. Start adding some medicines!");
-        await sendInteractiveMessage(from, "What would you like to do?", "", [
-          { id: "browse_categories", title: "Browse Categories" },
-          { id: "search_medicines", title: "Search Medicines" },
-          { id: "main_menu", title: "Main Menu" }
-        ]);
-        return;
-      }
-      
-      // Calculate totals
-      let total = 0;
-      let cartMessage = "🛒 *Your Cart*\n\n";
-      
-      cart.forEach((item, index) => {
-        const itemTotal = item.price * item.quantity;
-        total += itemTotal;
-        cartMessage += `${index + 1}. ${item.name} x${item.quantity} = ₹${itemTotal.toFixed(2)}\n`;
-      });
-      
-      cartMessage += `\n💵 *Total: ₹${total.toFixed(2)}*`;
-      
-      await sendTextMessage(from, cartMessage);
-      
-      // Check if any items require prescription
-      const requiresPrescription = cart.some(item => item.requires_prescription);
-      
-      if (requiresPrescription) {
-        await sendTextMessage(from, 
-          "📋 Some items in your cart require a prescription. " +
-          "Please upload a clear photo of your prescription when checking out."
-        );
-      }
-      
-      // Show cart options
-      const buttons = [
-        { id: "checkout", title: "✅ Checkout" },
-        { id: "clear_cart", title: "🗑️ Clear Cart" },
-        { id: "browse_categories", title: "🛍️ Continue Shopping" }
-      ];
-      
-      await sendInteractiveMessage(from, "Cart Options", "What would you like to do next?", buttons);
+      await handleViewCart(from, session);
       return;
     }
     
     // Handle checkout - both direct command and interactive button
     if (messageText === 'checkout' || 
         (message.interactive?.button_reply?.id && message.interactive.button_reply.id === 'checkout')) {
-      const cart = session.context_data.cart || [];
-      
-      if (cart.length === 0) {
-        await sendTextMessage(from, "Your cart is empty. Add some medicines first!");
-        return;
-      }
-      
-      // Check if any items require prescription
-      const requiresPrescription = cart.some(item => item.requires_prescription);
-      
-      if (requiresPrescription) {
-        // Store cart in session and ask for prescription
-        await updateUserSession(from, {
-          current_step: 'awaiting_prescription_checkout',
-          context_data: {
-            ...session.context_data,
-            checkout_in_progress: true
-          }
-        });
-        
-        await sendTextMessage(from, 
-          "📋 Some items in your cart require a prescription. " +
-          "Please upload a clear photo of your prescription to proceed with checkout."
-        );
-        return;
-      } else {
-        // Proceed to delivery details
-        await handleDeliveryDetails(from, session);
-      }
+      await handleCheckout(from, session);
       return;
     }
     
     // Handle clear cart - both direct command and interactive button
     if (messageText === 'clear_cart' || 
         (message.interactive?.button_reply?.id && message.interactive.button_reply.id === 'clear_cart')) {
-      await updateUserSession(from, {
-        current_step: 'browse_medicines',
-        context_data: {
-          ...session.context_data,
-          cart: []
-        }
-      });
-      
-      await sendTextMessage(from, "🛒 Your cart has been cleared.");
-      await sendInteractiveMessage(from, "What would you like to do?", "", [
-        { id: "browse_categories", title: "Browse Categories" },
-        { id: "search_medicines", title: "Search Medicines" },
-        { id: "main_menu", title: "Main Menu" }
-      ]);
+      await handleClearCart(from);
       return;
     }
     
@@ -1011,105 +376,19 @@ const handleIncomingMessage = async (from, message) => {
     // Handle Track Orders - match both 'track order' and 'track_order' for better UX
     if (messageText === 'track order' || messageText === 'track_order' || 
         (message.interactive?.button_reply?.id === 'track_order')) {
-      // Show loading message
-      await sendTextMessage(from, "🔍 Fetching your orders...");
-      
-      const orders = await getUserOrders(from);
-      console.log('Orders for tracking:', orders);
-      
-      if (!orders || orders.length === 0) {
-        await sendTextMessage(from, 
-          "📦 No orders found for your number.\n\n" +
-          "Would you like to place an order?"
-        );
-        await sendInteractiveMessage(from, "Start Order", "Place your first order:", [
-          { id: "browse_categories", title: "Browse Categories" },
-          { id: "search_medicines", title: "Search Medicines" },
-          { id: "main_menu", title: "Main Menu" }
-        ]);
-        return;
-      }
-      
-      let orderText = "📦 *Your Recent Orders*\n\n";
-      orders.slice(0, 5).forEach((order, index) => {
-        const orderDate = order.created_at ? new Date(order.created_at) : new Date();
-        const formattedDate = orderDate.toLocaleDateString('en-IN', {
-          day: '2-digit',
-          month: 'short',
-          year: 'numeric'
-        });
-        
-        orderText += `*${index + 1}. Order #${order.order_id || 'N/A'}*\n`;
-        orderText += `   Status: *${order.status ? order.status.toUpperCase() : 'PROCESSING'}*\n`;
-        orderText += `   Total: *₹${order.total_amount || '0.00'}*\n`;
-        orderText += `   Date: ${formattedDate}\n\n`;
-      });
-      
-      await sendTextMessage(from, orderText);
-      await sendInteractiveMessage(from, "Order Options", "What would you like to do?", [
-        { id: "browse_categories", title: "🛍️ Shop Again" },
-        { id: "view_cart", title: "🛒 View Cart" },
-        { id: "main_menu", title: "🏠 Main Menu" }
-      ]);
+      await handleTrackOrder(from);
       return;
     }
 
     // Handle Find Pharmacy
     if (messageText === 'find pharmacy') {
-      await updateUserSession(from, {
-        current_step: 'awaiting_location',
-        context_data: {}
-      });
-      
-      await sendTextMessage(from, 
-        "📍 Please share your location details:\n\n" +
-        "Type your city name or pincode to find nearby pharmacies."
-      );
+      await handleFindPharmacy(from);
       return;
     }
 
     // Handle location for pharmacy search
     if (session.current_step === 'awaiting_location') {
-      const location = message.text?.body?.trim();
-      
-      if (!location) {
-        await sendTextMessage(from, "Please enter your city name or pincode.");
-        return;
-      }
-      
-      // Try to determine if it's a pincode (numeric) or city name
-      const isNumeric = /^\d+$/.test(location);
-      const pharmacies = await getNearbyPharmacies(
-        isNumeric ? null : location,
-        isNumeric ? location : null
-      );
-      
-      if (pharmacies.length === 0) {
-        await sendTextMessage(from, 
-          `No pharmacies found near "${location}". Please try a different location.`
-        );
-        await sendInteractiveMessage(from, "Location Options", "What would you like to do?", [
-          { id: "find_pharmacy", title: "Try Another Location" },
-          { id: "main_menu", title: "Main Menu" }
-        ]);
-        return;
-      }
-      
-      let pharmacyText = `🏥 *Pharmacies near "${location}"*:\n\n`;
-      pharmacies.slice(0, 5).forEach((pharmacy, index) => {
-        pharmacyText += `*${index + 1}. ${pharmacy.name}*\n`;
-        pharmacyText += `   📍 ${pharmacy.address}\n`;
-        pharmacyText += `   📞 ${pharmacy.phone}\n`;
-        if (pharmacy.is_24x7) pharmacyText += `   🕐 Open 24x7\n`;
-        pharmacyText += `\n`;
-      });
-      
-      await sendTextMessage(from, pharmacyText);
-      await sendInteractiveMessage(from, "Pharmacy Options", "What would you like to do?", [
-        { id: "browse_categories", title: "Browse Medicines" },
-        { id: "find_pharmacy", title: "Find Another Location" },
-        { id: "main_menu", title: "Main Menu" }
-      ]);
+      await handleLocationInput(from, message);
       return;
     }
 
