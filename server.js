@@ -3,8 +3,6 @@ const express = require('express');
 const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
-const https = require('https');
-const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -17,118 +15,17 @@ app.use(express.urlencoded({ extended: true }));
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || 'your_whatsapp_access_token';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || 'your_phone_number_id';
 const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'WkLp!9x#Zq7$Hj2@Mv_d';
-const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL || 'https://backend-whatsapp-7z8a.onrender.com';
+const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL || 'http://localhost:8000/api/pharmacy';
 const WHATSAPP_API_URL = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
-// Native HTTP/HTTPS request function as fallback when axios fails
-const makeNativeRequest = (url, method = 'GET', requestData = null) => {
-  return new Promise((resolve, reject) => {
-    try {
-      // Parse the URL to determine if we need http or https
-      const parsedUrl = new URL(url);
-      const httpModule = parsedUrl.protocol === 'https:' ? https : http;
-      
-      const options = {
-        method: method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        timeout: 15000 // 15 seconds timeout
-      };
-      
-      console.log(`Making native ${method} request to ${url}`);
-      
-      const req = httpModule.request(url, options, (res) => {
-        let data = '';
-        
-        // Log response info
-        console.log(`Native request status: ${res.statusCode}`);
-        
-        // Handle response data
-        res.on('data', (chunk) => {
-          data += chunk;
-        });
-        
-        // When the response is complete
-        res.on('end', () => {
-          // Check if we got a successful status code
-          if (res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              // Try to parse as JSON
-              const parsedData = JSON.parse(data);
-              resolve(parsedData);
-            } catch (e) {
-              console.warn(`Failed to parse response as JSON: ${e.message}`);
-              // If we can't parse as JSON, resolve with the raw data
-              resolve({
-                rawData: data,
-                statusCode: res.statusCode,
-                headers: res.headers
-              });
-            }
-          } else {
-            // Handle error status codes
-            reject(new Error(`Request failed with status code ${res.statusCode}: ${data}`));
-          }
-        });
-      });
-      
-      // Handle request errors
-      req.on('error', (error) => {
-        console.error('Native request error:', error.message);
-        reject(error);
-      });
-      
-      // Handle timeouts
-      req.on('timeout', () => {
-        req.destroy();
-        reject(new Error('Request timed out'));
-      });
-      
-      // Send the request data if provided
-      if (requestData) {
-        const dataString = typeof requestData === 'string' ? 
-          requestData : JSON.stringify(requestData);
-        req.write(dataString);
-      }
-      
-      // End the request
-      req.end();
-      
-    } catch (error) {
-      console.error('Error in native request setup:', error.message);
-      reject(error);
-    }
-  });
-};
-
 // --- Django API Helper Functions ---
-const apiRequest = async (endpoint, method = 'GET', data = null, retries = 3) => {
+const apiRequest = async (endpoint, method = 'GET', data = null) => {
   try {
-    console.log(`Making ${method} request to ${DJANGO_BASE_URL}${endpoint}`);
-    
     const config = {
       method,
       url: `${DJANGO_BASE_URL}${endpoint}`,
       headers: {
         'Content-Type': 'application/json',
-      },
-      // Add timeout to prevent hanging requests
-      timeout: 10000, // 10 seconds
-      // Prevent automatic parsing of response if it might be malformed
-      transformResponse: [(data) => {
-        try {
-          // Try to parse as JSON
-          return JSON.parse(data);
-        } catch (e) {
-          // If parsing fails, return the raw data for manual handling
-          console.warn(`Failed to parse response as JSON: ${e.message}`);
-          return { rawData: data, parseError: e.message };
-        }
-      }],
-      // Validate status to ensure we handle all non-2xx responses
-      validateStatus: (status) => {
-        return status >= 200 && status < 300; // default
       }
     };
     
@@ -137,307 +34,59 @@ const apiRequest = async (endpoint, method = 'GET', data = null, retries = 3) =>
     }
     
     const response = await axios(config);
-    
-    // Check if we got a valid response
-    if (response.data && response.data.parseError) {
-      throw new Error(`Invalid response format: ${response.data.parseError}`);
-    }
-    
     return response.data;
   } catch (error) {
-    // Log detailed error information
-    console.error(`API Request Error (${endpoint}):`, {
-      message: error.message,
-      code: error.code,
-      url: `${DJANGO_BASE_URL}${endpoint}`,
-      method,
-      responseData: error.response?.data,
-      responseStatus: error.response?.status,
-      responseHeaders: error.response?.headers
-    });
-    
-    // Handle specific error types
-    if (error.code === 'ERR_BAD_RESPONSE') {
-      console.log('Received ERR_BAD_RESPONSE - trying native request as fallback');
-      
-      try {
-        // Try using the native request function as a fallback
-        const nativeResponse = await makeNativeRequest(
-          `${DJANGO_BASE_URL}${endpoint}`,
-          method,
-          data
-        );
-        console.log('Native request successful');
-        return nativeResponse;
-      } catch (nativeError) {
-        console.error('Native request also failed:', nativeError.message);
-        
-        // If native request also fails and we have retries left, try again with axios
-        if (retries > 0) {
-          console.log(`Retrying request with axios (${retries} attempts left)...`);
-          // Wait for a short time before retrying
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          return apiRequest(endpoint, method, data, retries - 1);
-        }
-      }
-    } else if (retries > 0) {
-      // For other errors, retry with axios if we have retries left
-      console.log(`Retrying request (${retries} attempts left)...`);
-      await new Promise(resolve => setTimeout(resolve, 1000));
-      return apiRequest(endpoint, method, data, retries - 1);
-    }
-    
-    // For ECONNREFUSED errors, provide more helpful message
-    if (error.code === 'ECONNREFUSED') {
-      console.error(`Connection refused to ${DJANGO_BASE_URL}. Is the backend server running?`);
-    }
-    
+    console.error(`API Request Error (${endpoint}):`, error.response?.data || error.message);
     throw error;
   }
 };
 
 // Session management with Django backend
 const getUserSession = async (phoneNumber) => {
-  // Add specific debugging for this endpoint
-  console.log(`=== Getting session for ${phoneNumber} ===`);
-  console.log(`Backend URL: ${DJANGO_BASE_URL}/api/whatsapp-session/${phoneNumber}/`);
-  
-  // First try a direct request with more detailed error handling
   try {
-    // Try a direct request with raw response handling
-    const directResponse = await axios({
-      method: 'GET',
-      url: `${DJANGO_BASE_URL}/api/whatsapp-session/${phoneNumber}/`,
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'User-Agent': 'WhatsAppBot/1.0'
-      },
-      timeout: 15000,
-      responseType: 'text', // Get raw text response to handle parsing manually
-      validateStatus: null // Don't throw on any status code
-    });
-    
-    // Log detailed response information
-    console.log(`Direct response status: ${directResponse.status}`);
-    console.log(`Response headers:`, directResponse.headers);
-    console.log(`Response size: ${directResponse.data?.length || 0} bytes`);
-    
-    // Check if response is valid
-    if (directResponse.status >= 200 && directResponse.status < 300) {
-      try {
-        // Try to parse the response as JSON
-        const sessionData = typeof directResponse.data === 'string' ? 
-          JSON.parse(directResponse.data) : directResponse.data;
-        
-        // Validate session data
-        if (!sessionData || typeof sessionData !== 'object') {
-          console.warn(`Invalid session data format for ${phoneNumber}:`, sessionData);
-          return createDefaultSession(phoneNumber);
-        }
-        
-        console.log(`Successfully retrieved session for ${phoneNumber}`);
-        return sessionData;
-      } catch (parseError) {
-        console.error(`Error parsing session response: ${parseError.message}`);
-        console.error(`Response content: ${directResponse.data?.substring(0, 200)}...`);
-        return createDefaultSession(phoneNumber);
-      }
-    } else if (directResponse.status === 404) {
-      console.log(`No session found for ${phoneNumber}, creating new one`);
+    console.log(`Getting session for ${phoneNumber}`);
+    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
+    return session;
+  } catch (error) {
+    if (error.response?.status === 404) {
       // Create new session if not found
-      try {
-        const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
-          current_step: 'start',
-          context_data: {}
-        });
-        return newSession;
-      } catch (createError) {
-        console.error(`Failed to create new session for ${phoneNumber}:`, createError.message);
-        return createDefaultSession(phoneNumber);
-      }
-    } else {
-      // Other error status codes
-      console.error(`Error status ${directResponse.status} when getting session for ${phoneNumber}`);
-      throw new Error(`HTTP error ${directResponse.status}`);
+      const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
+        current_step: 'start',
+        context_data: {}
+      });
+      return newSession;
     }
-  } catch (directError) {
-    console.error(`Direct request error for ${phoneNumber}:`, directError.message);
-    
-    // Fall back to standard apiRequest with additional error handling
-    try {
-      console.log(`Falling back to standard apiRequest for ${phoneNumber}`);
-      const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
-      
-      // Validate session data
-      if (!session || typeof session !== 'object') {
-        console.warn(`Invalid session data received for ${phoneNumber}:`, session);
-        return createDefaultSession(phoneNumber);
-      }
-      
-      return session;
-    } catch (error) {
-      console.error(`Error getting session for ${phoneNumber}:`, error.message);
-      
-      // Handle specific error cases
-      if (error.response?.status === 404) {
-        console.log(`No session found for ${phoneNumber}, creating new one`);
-        // Create new session if not found
-        try {
-          const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
-            current_step: 'start',
-            context_data: {}
-          });
-          return newSession;
-        } catch (createError) {
-          console.error(`Failed to create new session for ${phoneNumber}:`, createError.message);
-          return createDefaultSession(phoneNumber);
-        }
-      }
-      
-      // For ERR_BAD_RESPONSE or other critical errors, return a default session
-      if (error.code === 'ERR_BAD_RESPONSE' || error.code === 'ECONNREFUSED' || !error.response) {
-        console.warn(`Backend connection issue for ${phoneNumber}, using default session`);
-        return createDefaultSession(phoneNumber);
-      }
-      
-      // For other errors, still return a default session but log the full error
-      console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-      return createDefaultSession(phoneNumber);
-    }
+    throw error;
   }
-};
-
-// Helper function to create a default session when backend is unavailable
-const createDefaultSession = (phoneNumber) => {
-  console.log(`Creating default fallback session for ${phoneNumber}`);
-  return {
-    phone_number: phoneNumber,
-    current_step: 'start',
-    context_data: {},
-    is_fallback: true, // Flag to indicate this is a fallback session
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
 };
 
 const updateUserSession = async (phoneNumber, updates) => {
   try {
     console.log(`Updating session for ${phoneNumber}`, updates);
     const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', updates);
-    
-    // Validate session data
-    if (!session || typeof session !== 'object') {
-      console.warn(`Invalid session data received when updating ${phoneNumber}:`, session);
-      // Return the updates as a fallback
-      return {
-        ...updates,
-        phone_number: phoneNumber,
-        is_fallback: true,
-        updated_at: new Date().toISOString()
-      };
-    }
-    
     return session;
   } catch (error) {
-    console.error(`Error updating session for ${phoneNumber}:`, error.message);
-    
-    // For critical errors, return a session with the updates applied
-    // This ensures the bot can continue functioning even if the backend is having issues
-    if (error.code === 'ERR_BAD_RESPONSE' || error.code === 'ECONNREFUSED' || !error.response) {
-      console.warn(`Backend connection issue when updating session for ${phoneNumber}, using local fallback`);
-      // Get the current session first (which might be a fallback session)
-      try {
-        const currentSession = await getUserSession(phoneNumber);
-        return {
-          ...currentSession,
-          ...updates,
-          is_fallback: true,
-          updated_at: new Date().toISOString()
-        };
-      } catch (sessionError) {
-        // If we can't even get the current session, just return the updates
-        return {
-          ...updates,
-          phone_number: phoneNumber,
-          is_fallback: true,
-          updated_at: new Date().toISOString()
-        };
-      }
-    }
-    
-    // Log the full error for debugging
-    console.error('Full update error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
-    
-    // Return a fallback session with the updates
-    return {
-      ...updates,
-      phone_number: phoneNumber,
-      is_fallback: true,
-      updated_at: new Date().toISOString()
-    };
+    console.error('Error updating session:', error);
+    throw error;
   }
 };
 
 // Customer management
 const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
   try {
-    console.log(`Fetching customer data for ${phoneNumber}`);
-    // Use the whatsapp-session endpoint instead of customers
-    const customer = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
-    
-    // If customer data exists in the session, use it
-    if (customer && customer.context_data && customer.context_data.customer_info) {
-      return customer.context_data.customer_info;
-    }
-    
-    // Create or update customer profile
-    const customerResponse = await apiRequest(`/api/customers/${phoneNumber}/`, 'POST', {
-      whatsapp_number: phoneNumber,
-      ...additionalData
-    });
-    
-    // Store customer data in the session
-    await updateUserSession(phoneNumber, {
-      context_data: {
-        customer_info: {
-          phone_number: phoneNumber,
-          ...additionalData,
-          ...customerResponse
-        }
-      }
-    });
-    
-    return customerData;
+    const customer = await apiRequest(`/api/customers/${phoneNumber}/`);
+    return customer;
   } catch (error) {
-    console.error(`Error getting customer ${phoneNumber}:`, error.message);
-    
-    // If session doesn't exist or other error occurs
-    try {
-      console.log(`Creating new customer session for ${phoneNumber}`);
+    if (error.response?.status === 404) {
+      // Create new customer
       const customerData = {
         phone_number: phoneNumber,
         ...additionalData
       };
-      
-      // Create a new session with customer data
-      const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
-        current_step: 'start',
-        context_data: {
-          customer_info: customerData
-        }
-      });
-      
-      return customerData;
-    } catch (createError) {
-      console.error(`Failed to create customer session: ${createError.message}`);
-      // Return a fallback customer object
-      return {
-        phone_number: phoneNumber,
-        is_fallback: true,
-        ...additionalData
-      };
+      const newCustomer = await apiRequest(`/api/customers/${phoneNumber}/`, 'POST', customerData);
+      return newCustomer;
     }
+    throw error;
   }
 };
 
@@ -448,12 +97,11 @@ const getCategories = async () => {
     // Handle different possible response formats
     if (Array.isArray(response)) {
       return response; // If response is already an array
-    } else if (response && response.results) {
-      return response.results; // If response has a results array (pagination)
-    } else if (response && response.data) {
+    } else if (response && Array.isArray(response.results)) {
+      return response.results; // If response has a results array (common in paginated APIs)
+    } else if (response && response.data && Array.isArray(response.data)) {
       return response.data; // If response has a data array
     }
-    
     console.warn('Unexpected categories format:', response);
     return [];
   } catch (error) {
@@ -485,8 +133,7 @@ const getMedicinesByCategory = async (categoryId) => {
 
 const searchMedicines = async (query, limit = 10) => {
   try {
-    // Use the suggestions endpoint with symptom parameter
-    const medicines = await apiRequest(`/api/medicines/suggestions/?symptom=${encodeURIComponent(query)}&limit=${limit}`);
+    const medicines = await apiRequest(`/api/medicines/search/?q=${encodeURIComponent(query)}&limit=${limit}`);
     return medicines;
   } catch (error) {
     console.error('Error searching medicines:', error);
@@ -497,25 +144,9 @@ const searchMedicines = async (query, limit = 10) => {
 const getMedicineById = async (medicineId) => {
   try {
     const medicine = await apiRequest(`/api/medicines/${medicineId}/`);
-    if (medicine && typeof medicine === 'object') {
-      return {
-        id: medicine.id,
-        name: medicine.name,
-        generic_name: medicine.generic_name,
-        brand_name: medicine.brand_name,
-        mrp: parseFloat(medicine.mrp) || 0,
-        selling_price: parseFloat(medicine.selling_price) || 0,
-        prescription_type: medicine.prescription_type || 'OTC',
-        is_prescription_required: medicine.prescription_type === 'RX',
-        strength: medicine.strength,
-        form: medicine.form,
-        category: medicine.category_name || (medicine.category ? medicine.category.name : ''),
-        manufacturer: medicine.manufacturer_name || (medicine.manufacturer ? medicine.manufacturer.name : '')
-      };
-    }
-    return null;
+    return medicine;
   } catch (error) {
-    console.error(`Error fetching medicine by ID ${medicineId}:`, error);
+    console.error('Error fetching medicine by ID:', error);
     return null;
   }
 };
@@ -524,101 +155,51 @@ const getMedicineById = async (medicineId) => {
 const getUserOrders = async (phoneNumber) => {
   try {
     console.log(`Fetching orders for phone: ${phoneNumber}`);
-    const response = await apiRequest(`/api/orders/?phone_number=${encodeURIComponent(phoneNumber)}`);
-    
-    // Handle different response formats from Django REST framework
-    let orders = [];
-    if (Array.isArray(response)) {
-      orders = response;
-    } else if (response && Array.isArray(response.results)) {
-      // Handle paginated response
-      orders = response.results;
-    } else if (response && Array.isArray(response.data)) {
-      // Handle custom response format
-      orders = response.data;
-    }
-    
-    // Format orders for the bot
-    return orders.map(order => ({
-      order_id: order.order_id || order.id,
-      status: order.status || 'pending',
-      created_at: order.created_at || new Date().toISOString(),
-      total_amount: parseFloat(order.total_amount) || 0,
-      items: (order.items || []).map(item => ({
-        name: item.medicine_name || 'Unknown Medicine',
-        quantity: item.quantity || 1,
-        price: parseFloat(item.unit_price) || 0,
-        total: parseFloat(item.total_price) || 0
-      })),
-      delivery_address: order.delivery_address || '',
-      pharmacy: order.pharmacy_name || (order.pharmacy ? order.pharmacy.name : 'Unknown Pharmacy'),
-      payment_status: order.payment_status || 'pending'
-    }));
-    
+    const orders = await apiRequest(`/api/orders/customer/${phoneNumber}/`);
+    console.log('Fetched orders:', JSON.stringify(orders, null, 2));
+    return Array.isArray(orders) ? orders : [];
   } catch (error) {
     console.error('Error fetching user orders:', error);
+    if (error.response) {
+      console.error('Error response:', {
+        status: error.response.status,
+        data: error.response.data,
+        headers: error.response.headers
+      });
+    }
     return [];
   }
 };
 
 const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) => {
   try {
-    // Ensure customer exists or create a new one
-    await getOrCreateCustomer(phoneNumber, {
-      name: additionalData.customer_name,
-      address: additionalData.delivery_address,
-      city: additionalData.city,
-      pincode: additionalData.pincode
-    });
+    const customer = await getOrCreateCustomer(phoneNumber);
     
-    // Get pharmacy ID - use provided or find nearby
-    let pharmacyId = additionalData.pharmacy_id;
+    // Get the first pharmacy based on delivery address
+    const deliveryAddress = additionalData.delivery_address || {};
+    const pharmacies = await getNearbyPharmacies(deliveryAddress.city, deliveryAddress.pincode);
+    const pharmacyId = pharmacies.length > 0 ? pharmacies[0].id : null;
+    
     if (!pharmacyId) {
-      const pharmacies = await getNearbyPharmacies(additionalData.city, additionalData.pincode);
-      if (pharmacies.length > 0) {
-        pharmacyId = pharmacies[0].id;
-      } else {
-        throw new Error('No pharmacy available to fulfill this order');
-      }
+      throw new Error('No pharmacy available to fulfill this order');
     }
     
-    // Prepare order data according to QuickOrderSerializer
     const orderData = {
       customer_phone: phoneNumber,
       pharmacy_id: pharmacyId,
       medicines: orderItems.map(item => ({
         medicine_id: item.medicine_id || item.id,
-        quantity: item.quantity || 1
-      })),
-      delivery_address: additionalData.delivery_address || '',
-      notes: additionalData.notes || ''
-    };
-    
-    console.log('Creating quick order with data:', orderData);
-    
-    // Call the order creation endpoint
-    const order = await apiRequest('/api/orders/quick-create/', 'POST', orderData);
-    
-    // Format the response
-    return {
-      order_id: order.order_id || order.id,
-      status: order.status || 'pending',
-      created_at: order.created_at || new Date().toISOString(),
-      total_amount: parseFloat(order.total_amount) || 0,
-      items: orderItems.map(item => ({
-        medicine_id: item.medicine_id || item.id,
-        name: item.name || 'Unknown',
         quantity: item.quantity || 1,
-        price: parseFloat(item.price) || 0
+        prescription_file: item.prescription_file || null
       })),
-      delivery_address: order.delivery_address || additionalData.delivery_address || '',
-      pharmacy: order.pharmacy_name || (order.pharmacy ? order.pharmacy.name : 'Unknown Pharmacy'),
-      payment_status: order.payment_status || 'pending',
-      prescription_required: order.prescription_required || false
+      ...additionalData
     };
     
+    console.log('Creating order with data:', orderData);
+    const order = await apiRequest('/api/orders/quick-create/', 'POST', orderData);
+    return order;
   } catch (error) {
-    console.error('Error creating quick order:', error);
+    console.error('Error creating order:', error);
     throw error;
   }
 };
@@ -641,75 +222,33 @@ const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) =>
 //   }
 // };
 const getNearbyPharmacies = async (city = null, pincode = null) => {
-  try {
-    const params = new URLSearchParams();
-    if (city) params.append('city', city);
-    if (pincode) params.append('pincode', pincode);
-    
-    const response = await apiRequest(`/api/pharmacies/nearby/?${params.toString()}`);
-    
-    // Handle different response formats
-    let pharmacies = [];
-    if (Array.isArray(response)) {
-      pharmacies = response;
-    } else if (response && Array.isArray(response.results)) {
-      // Handle paginated response
-      pharmacies = response.results;
-    } else if (response && Array.isArray(response.data)) {
-      // Handle custom response format
-      pharmacies = response.data;
+    try {
+      const params = new URLSearchParams();
+      if (city) params.append('city', city);
+      if (pincode) params.append('pincode', pincode);
+      
+      const response = await apiRequest(`/api/pharmacies/nearby/?${params.toString()}`);
+      return response;
+    } catch (error) {
+      console.error('Error fetching pharmacies:', error);
+      
+      // For testing - return a test pharmacy if none found
+      // Remove this in production
+      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
+        console.log('Returning test pharmacy for development');
+        return [{
+          id: 'test-pharmacy-1',
+          name: 'Test Pharmacy',
+          address: '123 Test St, Test City',
+          phone: '+1234567890',
+          pincodes: ['110001', '110002', '110003'], // Add test pincodes here
+          is_active: true
+        }];
+      }
+      
+      throw error;
     }
-    
-    // Format pharmacies data
-    return pharmacies.map(pharmacy => ({
-      id: pharmacy.id,
-      name: pharmacy.name || 'Unknown Pharmacy',
-      address: [
-        pharmacy.address_line1,
-        pharmacy.address_line2,
-        pharmacy.landmark,
-        pharmacy.area,
-        pharmacy.city,
-        pharmacy.state,
-        pharmacy.pincode
-      ].filter(Boolean).join(', '),
-      phone: pharmacy.phone_number || pharmacy.phone || '',
-      email: pharmacy.email || '',
-      is_active: pharmacy.is_active !== false,
-      pincodes: [pharmacy.pincode].filter(Boolean),
-      city: pharmacy.city,
-      state: pharmacy.state,
-      latitude: pharmacy.latitude,
-      longitude: pharmacy.longitude,
-      opening_hours: pharmacy.opening_hours || '9:00 AM - 10:00 PM',
-      delivery_radius_km: pharmacy.delivery_radius_km || 5
-    }));
-    
-  } catch (error) {
-    console.error('Error fetching nearby pharmacies:', error);
-    
-    // For development/testing - return a test pharmacy if none found
-    if (process.env.NODE_ENV !== 'production') {
-      console.log('Returning test pharmacy for development');
-      return [{
-        id: 'test-pharmacy-1',
-        name: 'Test Pharmacy',
-        address: '123 Test St, Test City',
-        phone: '+1234567890',
-        pincodes: [pincode || '110001', '110002', '110003'].filter(Boolean),
-        is_active: true,
-        city: city || 'Test City',
-        state: 'Test State',
-        latitude: 28.6139,
-        longitude: 77.2090,
-        opening_hours: '9:00 AM - 10:00 PM',
-        delivery_radius_km: 5
-      }];
-    }
-    
-    return [];
-  }
-};
+  };
 
 // Prescription upload (you'll need to implement file storage)
 const uploadPrescription = async (fileBuffer, fileName, phoneNumber) => {
