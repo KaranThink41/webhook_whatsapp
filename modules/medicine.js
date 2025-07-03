@@ -356,11 +356,20 @@ const handleCheckout = async (from, session) => {
     return;
   }
   
+  // Update session to reflect checkout in progress
+  await updateUserSession(from, {
+    current_step: 'checkout_started',
+    context_data: {
+      ...session.context_data,
+      checkout_in_progress: true
+    }
+  });
+  
   // Check if any items require prescription
   const requiresPrescription = cart.some(item => item.requires_prescription);
   
   if (requiresPrescription) {
-    // Store cart in session and ask for prescription
+    // Update session for prescription upload
     await updateUserSession(from, {
       current_step: 'awaiting_prescription_checkout',
       context_data: {
@@ -375,7 +384,13 @@ const handleCheckout = async (from, session) => {
     );
   } else {
     // Proceed to delivery details
-    await handleDeliveryDetails(from, session);
+    await handleDeliveryDetails(from, {
+      ...session,
+      context_data: {
+        ...session.context_data,
+        checkout_in_progress: true
+      }
+    });
   }
 };
 

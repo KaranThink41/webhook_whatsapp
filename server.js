@@ -270,8 +270,11 @@ const handleIncomingMessage = async (from, message) => {
         address: addressLines.join(', '),
         city,
         pincode,
-        landmark
+        landmark,
+        messageText // Log the original message for debugging
       });
+      
+      console.log('Current session before update:', JSON.stringify(session, null, 2));
       
       try {
         // Update customer with address
