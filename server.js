@@ -391,16 +391,20 @@ const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
       return customer.context_data.customer_info;
     }
     
-    // Otherwise create a basic customer object
-    const customerData = {
-      phone_number: phoneNumber,
+    // Create or update customer profile
+    const customerResponse = await apiRequest(`/api/customers/${phoneNumber}/`, 'POST', {
+      whatsapp_number: phoneNumber,
       ...additionalData
-    };
+    });
     
     // Store customer data in the session
     await updateUserSession(phoneNumber, {
       context_data: {
-        customer_info: customerData
+        customer_info: {
+          phone_number: phoneNumber,
+          ...additionalData,
+          ...customerResponse
+        }
       }
     });
     
@@ -440,15 +444,16 @@ const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
 // Medicine and catalog functions
 const getCategories = async () => {
   try {
-    const response = await apiRequest('/categories/');
+    const response = await apiRequest('/api/categories/');
     // Handle different possible response formats
     if (Array.isArray(response)) {
       return response; // If response is already an array
-    } else if (response && Array.isArray(response.results)) {
-      return response.results; // If response has a results array (common in paginated APIs)
-    } else if (response && response.data && Array.isArray(response.data)) {
+    } else if (response && response.results) {
+      return response.results; // If response has a results array (pagination)
+    } else if (response && response.data) {
       return response.data; // If response has a data array
     }
+    
     console.warn('Unexpected categories format:', response);
     return [];
   } catch (error) {
@@ -459,7 +464,7 @@ const getCategories = async () => {
 
 const getMedicinesByCategory = async (categoryId) => {
   try {
-    const response = await apiRequest(`/medicines/?category=${categoryId}`);
+    const response = await apiRequest(`/api/medicines/?category=${categoryId}`);
     
     // Handle different possible response formats
     if (Array.isArray(response)) {
@@ -478,10 +483,10 @@ const getMedicinesByCategory = async (categoryId) => {
   }
 };
 
-const searchMedicines = async (query, limit = 5) => {
+const searchMedicines = async (query, limit = 10) => {
   try {
-    // Use medicine_suggestions endpoint based on backend structure
-    const medicines = await apiRequest(`/medicine_suggestions/?symptom=${encodeURIComponent(query)}&limit=${limit}`);
+    // Use the suggestions endpoint with symptom parameter
+    const medicines = await apiRequest(`/api/medicines/suggestions/?symptom=${encodeURIComponent(query)}&limit=${limit}`);
     return medicines;
   } catch (error) {
     console.error('Error searching medicines:', error);
@@ -491,18 +496,26 @@ const searchMedicines = async (query, limit = 5) => {
 
 const getMedicineById = async (medicineId) => {
   try {
-    // Since there's no medicine by ID endpoint, return hardcoded medicine
-    console.log('Using hardcoded medicine for ID:', medicineId);
-    const medicine = {
-      id: medicineId,
-      name: 'Paracetamol',
-      description: 'Pain relief medication',
-      price: 10.99,
-      image: 'https://example.com/medicine-image.jpg'
-    };
-    return medicine;
+    const medicine = await apiRequest(`/api/medicines/${medicineId}/`);
+    if (medicine && typeof medicine === 'object') {
+      return {
+        id: medicine.id,
+        name: medicine.name,
+        generic_name: medicine.generic_name,
+        brand_name: medicine.brand_name,
+        mrp: parseFloat(medicine.mrp) || 0,
+        selling_price: parseFloat(medicine.selling_price) || 0,
+        prescription_type: medicine.prescription_type || 'OTC',
+        is_prescription_required: medicine.prescription_type === 'RX',
+        strength: medicine.strength,
+        form: medicine.form,
+        category: medicine.category_name || (medicine.category ? medicine.category.name : ''),
+        manufacturer: medicine.manufacturer_name || (medicine.manufacturer ? medicine.manufacturer.name : '')
+      };
+    }
+    return null;
   } catch (error) {
-    console.error('Error fetching medicine by ID:', error);
+    console.error(`Error fetching medicine by ID ${medicineId}:`, error);
     return null;
   }
 };
@@ -511,89 +524,101 @@ const getMedicineById = async (medicineId) => {
 const getUserOrders = async (phoneNumber) => {
   try {
     console.log(`Fetching orders for phone: ${phoneNumber}`);
+    const response = await apiRequest(`/api/orders/?phone_number=${encodeURIComponent(phoneNumber)}`);
     
-    // Get user session which may contain order data in context
-    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
-    
-    // Check if there are orders in the session context
-    if (session && session.context_data && session.context_data.orders) {
-      console.log('Found orders in session context');
-      return Array.isArray(session.context_data.orders) ? session.context_data.orders : [];
+    // Handle different response formats from Django REST framework
+    let orders = [];
+    if (Array.isArray(response)) {
+      orders = response;
+    } else if (response && Array.isArray(response.results)) {
+      // Handle paginated response
+      orders = response.results;
+    } else if (response && Array.isArray(response.data)) {
+      // Handle custom response format
+      orders = response.data;
     }
     
-    // If no orders in session, return empty array
-    console.log('No orders found in session');
-    return [];
+    // Format orders for the bot
+    return orders.map(order => ({
+      order_id: order.order_id || order.id,
+      status: order.status || 'pending',
+      created_at: order.created_at || new Date().toISOString(),
+      total_amount: parseFloat(order.total_amount) || 0,
+      items: (order.items || []).map(item => ({
+        name: item.medicine_name || 'Unknown Medicine',
+        quantity: item.quantity || 1,
+        price: parseFloat(item.unit_price) || 0,
+        total: parseFloat(item.total_price) || 0
+      })),
+      delivery_address: order.delivery_address || '',
+      pharmacy: order.pharmacy_name || (order.pharmacy ? order.pharmacy.name : 'Unknown Pharmacy'),
+      payment_status: order.payment_status || 'pending'
+    }));
+    
   } catch (error) {
     console.error('Error fetching user orders:', error);
-    if (error.response) {
-      console.error('Error response:', {
-        status: error.response.status,
-        data: error.response.data,
-        headers: error.response.headers
-      });
-    }
-    
-    // Return test orders for development
-    if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
-      console.log('Returning test orders for development');
-      return [{
-        id: 'test-order-1',
-        order_number: 'WA12345',
-        status: 'processing',
-        created_at: new Date().toISOString(),
-        total_amount: 249.99,
-        items: [{ name: 'Paracetamol', quantity: 2 }]
-      }];
-    }
-    
     return [];
   }
 };
 
 const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) => {
   try {
-    const customer = await getOrCreateCustomer(phoneNumber);
+    // Ensure customer exists or create a new one
+    await getOrCreateCustomer(phoneNumber, {
+      name: additionalData.customer_name,
+      address: additionalData.delivery_address,
+      city: additionalData.city,
+      pincode: additionalData.pincode
+    });
     
-    // Get the first pharmacy based on delivery address
-    const deliveryAddress = additionalData.delivery_address || {};
-    const pharmacies = await getNearbyPharmacies(deliveryAddress.city, deliveryAddress.pincode);
-    const pharmacyId = pharmacies.length > 0 ? pharmacies[0].id : null;
-    
+    // Get pharmacy ID - use provided or find nearby
+    let pharmacyId = additionalData.pharmacy_id;
     if (!pharmacyId) {
-      throw new Error('No pharmacy available to fulfill this order');
+      const pharmacies = await getNearbyPharmacies(additionalData.city, additionalData.pincode);
+      if (pharmacies.length > 0) {
+        pharmacyId = pharmacies[0].id;
+      } else {
+        throw new Error('No pharmacy available to fulfill this order');
+      }
     }
     
+    // Prepare order data according to QuickOrderSerializer
     const orderData = {
       customer_phone: phoneNumber,
       pharmacy_id: pharmacyId,
       medicines: orderItems.map(item => ({
         medicine_id: item.medicine_id || item.id,
-        quantity: item.quantity || 1,
-        prescription_file: item.prescription_file || null
+        quantity: item.quantity || 1
       })),
-      ...additionalData
+      delivery_address: additionalData.delivery_address || '',
+      notes: additionalData.notes || ''
     };
     
-    console.log('Creating order with data:', orderData);
-    // Store order in the user's session context instead of dedicated order endpoint
-    const sessionUpdate = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
-      context_data: {
-        orders: [orderData]
-      }
-    });
+    console.log('Creating quick order with data:', orderData);
     
-    // Create a local order object with generated ID
-    const order = {
-      id: `order-${Date.now()}`,
-      order_number: `WA${Math.floor(10000 + Math.random() * 90000)}`,
-      status: 'received',
-      created_at: new Date().toISOString(),
-      ...orderData
+    // Call the order creation endpoint
+    const order = await apiRequest('/api/orders/quick-create/', 'POST', orderData);
+    
+    // Format the response
+    return {
+      order_id: order.order_id || order.id,
+      status: order.status || 'pending',
+      created_at: order.created_at || new Date().toISOString(),
+      total_amount: parseFloat(order.total_amount) || 0,
+      items: orderItems.map(item => ({
+        medicine_id: item.medicine_id || item.id,
+        name: item.name || 'Unknown',
+        quantity: item.quantity || 1,
+        price: parseFloat(item.price) || 0
+      })),
+      delivery_address: order.delivery_address || additionalData.delivery_address || '',
+      pharmacy: order.pharmacy_name || (order.pharmacy ? order.pharmacy.name : 'Unknown Pharmacy'),
+      payment_status: order.payment_status || 'pending',
+      prescription_required: order.prescription_required || false
     };
-    return order;
+    
   } catch (error) {
-    console.error('Error creating order:', error);
+    console.error('Error creating quick order:', error);
     throw error;
   }
 };
@@ -616,34 +641,75 @@ const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) =>
 //   }
 // };
 const getNearbyPharmacies = async (city = null, pincode = null) => {
-    try {
-      const params = new URLSearchParams();
-      if (city) params.append('city', city);
-      if (pincode) params.append('pincode', pincode);
-      
-      // Use pharmacy_nearby endpoint based on backend structure
-      const response = await apiRequest(`/pharmacy_nearby/?${params.toString()}`);
-      return response;
-    } catch (error) {
-      console.error('Error fetching pharmacies:', error);
-      
-      // For testing - return a test pharmacy if none found
-      // Remove this in production
-      if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
-        console.log('Returning test pharmacy for development');
-        return [{
-          id: 'test-pharmacy-1',
-          name: 'Test Pharmacy',
-          address: '123 Test St, Test City',
-          phone: '+1234567890',
-          pincodes: ['110001', '110002', '110003'], // Add test pincodes here
-          is_active: true
-        }];
-      }
-      
-      throw error;
+  try {
+    const params = new URLSearchParams();
+    if (city) params.append('city', city);
+    if (pincode) params.append('pincode', pincode);
+    
+    const response = await apiRequest(`/api/pharmacies/nearby/?${params.toString()}`);
+    
+    // Handle different response formats
+    let pharmacies = [];
+    if (Array.isArray(response)) {
+      pharmacies = response;
+    } else if (response && Array.isArray(response.results)) {
+      // Handle paginated response
+      pharmacies = response.results;
+    } else if (response && Array.isArray(response.data)) {
+      // Handle custom response format
+      pharmacies = response.data;
     }
-  };
+    
+    // Format pharmacies data
+    return pharmacies.map(pharmacy => ({
+      id: pharmacy.id,
+      name: pharmacy.name || 'Unknown Pharmacy',
+      address: [
+        pharmacy.address_line1,
+        pharmacy.address_line2,
+        pharmacy.landmark,
+        pharmacy.area,
+        pharmacy.city,
+        pharmacy.state,
+        pharmacy.pincode
+      ].filter(Boolean).join(', '),
+      phone: pharmacy.phone_number || pharmacy.phone || '',
+      email: pharmacy.email || '',
+      is_active: pharmacy.is_active !== false,
+      pincodes: [pharmacy.pincode].filter(Boolean),
+      city: pharmacy.city,
+      state: pharmacy.state,
+      latitude: pharmacy.latitude,
+      longitude: pharmacy.longitude,
+      opening_hours: pharmacy.opening_hours || '9:00 AM - 10:00 PM',
+      delivery_radius_km: pharmacy.delivery_radius_km || 5
+    }));
+    
+  } catch (error) {
+    console.error('Error fetching nearby pharmacies:', error);
+    
+    // For development/testing - return a test pharmacy if none found
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Returning test pharmacy for development');
+      return [{
+        id: 'test-pharmacy-1',
+        name: 'Test Pharmacy',
+        address: '123 Test St, Test City',
+        phone: '+1234567890',
+        pincodes: [pincode || '110001', '110002', '110003'].filter(Boolean),
+        is_active: true,
+        city: city || 'Test City',
+        state: 'Test State',
+        latitude: 28.6139,
+        longitude: 77.2090,
+        opening_hours: '9:00 AM - 10:00 PM',
+        delivery_radius_km: 5
+      }];
+    }
+    
+    return [];
+  }
+};
 
 // Prescription upload (you'll need to implement file storage)
 const uploadPrescription = async (fileBuffer, fileName, phoneNumber) => {
