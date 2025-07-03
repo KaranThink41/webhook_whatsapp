@@ -136,7 +136,7 @@ async function handleCategorySelection(from, message) {
       rows: medicines.slice(0, 10).map(medicine => ({
         id: `med_${medicine.id}`,
         title: medicine.name,
-        description: `₹${medicine.mrp} ${medicine.prescription_type === 'RX' ? '(Rx Required)' : ''}`
+        description: `₹${medicine.mrp || medicine.price || '0.00'} ${medicine.prescription_type === 'RX' ? '(Rx Required)' : ''}`
       }))
     }];
     
@@ -189,7 +189,7 @@ async function handleMedicineSearch(from, query) {
     rows: medicines.slice(0, 10).map(medicine => ({
       id: `med_${medicine.id}`,
       title: medicine.name || 'Unnamed Medicine',
-      description: (medicine.description || `Price: ₹${medicine.price || 'N/A'}`).substring(0, 72)
+      description: `₹${medicine.mrp || medicine.price || '0.00'} ${medicine.prescription_type === 'RX' ? '(Rx Required)' : ''}`
     }))
   }];
   
@@ -229,8 +229,8 @@ async function handleMedicineSelection(from, message, session) {
     // Show medicine details
     const medicineDetails = `💊 *${medicine.name}*\n\n` +
       `ℹ️ ${medicine.description || 'No description available'}\n\n` +
-      `💰 Price: ₹${medicine.price || 'N/A'}\n` +
-      `📦 In Stock: ${medicine.stock_quantity > 0 ? 'Yes' : 'No'}\n` +
+      `💰 Price: ₹${medicine.mrp || medicine.price || '0.00'}\n` +
+      `📦 In Stock: ${medicine.stock_quantity !== 0 ? 'Yes' : 'No'}\n` +
       `${medicine.prescription_type === 'RX' ? '📝 *Prescription Required*' : ''}`;
     
     await sendTextMessage(from, medicineDetails);
@@ -315,7 +315,7 @@ const handleAddToCart = async (from, medicine, session) => {
       id: medicineId,
       medicine_id: medicineId,  // Include both for backward compatibility
       name: medicine.name,
-      price: medicine.price || '0.00',
+      price: medicine.mrp || medicine.price || '0.00',
       quantity: 1,
       requires_prescription: medicine.requires_prescription || medicine.prescription_type === 'RX',
       prescription_type: medicine.prescription_type || (medicine.requires_prescription ? 'RX' : 'OTC')

@@ -200,10 +200,9 @@ const handleIncomingMessage = async (from, message) => {
           "*Example:*\n" +
           "John Doe\n" +
           "123 Main Street, Apartment 4B\n" +
-          "New Delhi\n" +
-          "110001\n" +
+          "400001\n" +
           "Near Central Park (optional)\n\n" +
-          "Please include at least your name, address, city, and pincode."
+          "Please include at least your name, address, and pincode."
         );
         return;
       }
@@ -213,52 +212,43 @@ const handleIncomingMessage = async (from, message) => {
       
       // Initialize variables
       let pincode = '';
-      let city = '';
       let addressLines = [];
       let landmark = '';
       
-      // Try to find pincode (6-digit number) in the message
-      const pincodeMatch = messageText.match(/\b(\d{6})\b/);
+      // Try to find pincode (5 or 6-digit number) in the message
+      const pincodeMatch = messageText.match(/\b(\d{5,6})\b/);
       if (pincodeMatch) {
         pincode = pincodeMatch[1];
-        
-        // Remove pincode from the message for further processing
-        const messageWithoutPincode = messageText.replace(pincode, '');
-        const detailsWithoutPincode = messageWithoutPincode.split('\n').map(line => line.trim()).filter(line => line);
-        
-        // The first line is the name
-        // The rest are address lines, city, and landmark
-        if (detailsWithoutPincode.length >= 3) {
-          // First line is name (already captured)
-          // Next lines are address lines and city
-          city = detailsWithoutPincode[detailsWithoutPincode.length - 2]; // Second last line is city
-          addressLines = detailsWithoutPincode.slice(1, -2); // All lines between name and city are address
-          landmark = detailsWithoutPincode[detailsWithoutPincode.length - 1]; // Last line is landmark (optional)
-        } else {
-          // Fallback if we can't parse properly
-          city = detailsWithoutPincode[1] || '';
-          addressLines = detailsWithoutPincode.slice(2);
-        }
-      } else {
-        // If no pincode found, use the last line as city and the rest as address
-        city = details[details.length - 1];
-        addressLines = details.slice(1, -1);
       }
       
-      // Validate required fields
-      if (!pincode || !city || addressLines.length === 0) {
+      // Process address lines
+      if (details.length >= 3) {
+        // First line is name
+        // Last line might be landmark
+        // Everything in between is address
+        addressLines = details.slice(1, -1);
+        landmark = details[details.length - 1];
+        
+        // If pincode is in the last line, that line is not a landmark
+        if (details[details.length - 1].includes(pincode)) {
+          landmark = '';
+        }
+      } else {
+        addressLines = [details[1]];
+      }
+      
+      // Validate required fields - only name, address and pincode are mandatory
+      if (!name || addressLines.length === 0 || !pincode) {
         await sendTextMessage(from, 
           "❌ Please provide a complete address including:\n" +
           "- Full name\n" +
           "- Complete address\n" +
-          "- City\n" +
-          "- 6-digit pincode\n" +
+          "- Pincode (5 or 6 digits)\n" +
           "- Landmark (optional)\n\n" +
           "*Example:*\n" +
           "John Doe\n" +
           "123 Main Street, Apartment 4B\n" +
-          "New Delhi\n" +
-          "110001\n" +
+          "400001\n" +
           "Near Central Park"
         );
         return;
@@ -268,7 +258,6 @@ const handleIncomingMessage = async (from, message) => {
       console.log('Parsed address details:', {
         name,
         address: addressLines.join(', '),
-        city,
         pincode,
         landmark
       });
@@ -278,7 +267,7 @@ const handleIncomingMessage = async (from, message) => {
         const customer = await getOrCreateCustomer(from, {
           name: name,
           address: addressLines.join(', '),
-          city: city,
+          city: addressLines[0], // Use first address line as city if needed
           pincode: pincode,
           landmark: landmark
         });
