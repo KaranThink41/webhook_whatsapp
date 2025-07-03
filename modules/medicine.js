@@ -352,12 +352,19 @@ const handleCheckout = async (from, session) => {
   const cart = session.context_data.cart || [];
   
   if (cart.length === 0) {
-    await sendTextMessage(from, "Your cart is empty. Add some medicines first!");
+    await sendTextMessage(from, "Your cart is empty. Please add items before checking out.");
     return;
   }
   
-  // Check if any items require prescription
-  const requiresPrescription = cart.some(item => item.requires_prescription);
+  console.log('Cart items:', JSON.stringify(cart, null, 2));
+  
+  // Check if any item requires prescription
+  const requiresPrescription = cart.some(item => {
+    console.log(`Item ${item.name} - requires_prescription: ${item.requires_prescription}, prescription_type: ${item.prescription_type}`);
+    return item.requires_prescription === true || item.prescription_type === 'RX';
+  });
+  
+  console.log('Requires prescription check:', requiresPrescription);
   
   if (requiresPrescription) {
     // Store cart in session and ask for prescription
