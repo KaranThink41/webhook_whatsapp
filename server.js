@@ -410,6 +410,25 @@ const handleIncomingMessage = async (from, message) => {
       return;
     }
 
+    // Handle Add to Cart button click
+    if (message.interactive?.button_reply?.id?.startsWith('add_')) {
+      const medicineId = message.interactive.button_reply.id.replace('add_', '');
+      try {
+        const medicine = await getMedicineById(medicineId);
+        if (medicine) {
+          await handleAddToCart(from, medicine, session);
+          return;
+        } else {
+          console.error(`Medicine not found with ID: ${medicineId}`);
+          await sendTextMessage(from, "❌ Sorry, we couldn't find that medicine. Please try again.");
+        }
+      } catch (error) {
+        console.error('Error adding to cart:', error);
+        await sendTextMessage(from, "❌ Sorry, there was an error adding the item to your cart. Please try again.");
+      }
+      return;
+    }
+
     // Default response for unrecognized input
     await sendTextMessage(from, 
       "I didn't understand that. Please select an option from the menu or type 'hi' to start over."
