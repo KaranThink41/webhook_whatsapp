@@ -69,33 +69,28 @@ const sendListMessage = async (to, header, body, sections) => {
 const downloadWhatsAppMedia = async (mediaId) => {
   try {
     // Get media URL from WhatsApp API
-    const mediaResponse = await axios({
-      method: 'GET',
-      url: `https://graph.facebook.com/v18.0/${mediaId}`,
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
-      }
-    });
+    const mediaResponse = await apiRequest(
+      `https://graph.facebook.com/v18.0/${mediaId}`, 
+      'GET'
+    );
     
-    if (!mediaResponse.data || !mediaResponse.data.url) {
+    if (!mediaResponse || !mediaResponse.url) {
       throw new Error('Invalid media response from WhatsApp API');
     }
     
     // Download the actual media
-    const mediaBuffer = await axios({
-      method: 'GET',
-      url: mediaResponse.data.url,
-      headers: {
-        'Authorization': `Bearer ${WHATSAPP_TOKEN}`
-      },
-      responseType: 'arraybuffer'
-    });
+    const mediaBuffer = await apiRequest(
+      mediaResponse.url,
+      'GET',
+      null,
+      { responseType: 'arraybuffer' }
+    );
     
     return {
-      buffer: Buffer.from(mediaBuffer.data),
-      size: mediaBuffer.data.byteLength,
-      contentType: mediaResponse.data.mime_type,
-      url: mediaResponse.data.url
+      buffer: Buffer.from(mediaBuffer),
+      size: mediaBuffer.byteLength,
+      contentType: mediaResponse.mime_type,
+      url: mediaResponse.url
     };
   } catch (error) {
     console.error('Error downloading media:', error.response?.data || error.message);
