@@ -12,14 +12,27 @@ const { updateUserSession } = require('./session');
 
 const getNearbyPharmacies = async (city = null, pincode = null) => {
   try {
+    // Validate that at least one parameter is provided
+    if (!city && !pincode) {
+      throw new Error('Pincode or city is required');
+    }
+    
     const params = new URLSearchParams();
     if (city) params.append('city', city);
     if (pincode) params.append('pincode', pincode);
     
+    console.log(`Searching pharmacies with params: city=${city}, pincode=${pincode}`);
     const response = await apiRequest(`/api/pharmacies/nearby/?${params.toString()}`);
     return response;
   } catch (error) {
     console.error('Error fetching pharmacies:', error);
+    
+    // Log detailed error information
+    if (error.response) {
+      console.error('Error response data:', error.response.data);
+      console.error('Error status:', error.response.status);
+      console.error('Error headers:', error.response.headers);
+    }
     
     // For testing - return a test pharmacy if none found
     if (process.env.NODE_ENV === 'development' || process.env.NODE_ENV === 'test') {
