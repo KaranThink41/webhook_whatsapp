@@ -3,6 +3,8 @@ const express = require('express');
 const axios = require('axios');
 const multer = require('multer');
 const FormData = require('form-data');
+const https = require('https');
+const http = require('http');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -18,14 +20,115 @@ const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'WkLp!9x#Zq7$Hj
 const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL;
 const WHATSAPP_API_URL = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
+// Native HTTP/HTTPS request function as fallback when axios fails
+const makeNativeRequest = (url, method = 'GET', requestData = null) => {
+  return new Promise((resolve, reject) => {
+    try {
+      // Parse the URL to determine if we need http or https
+      const parsedUrl = new URL(url);
+      const httpModule = parsedUrl.protocol === 'https:' ? https : http;
+      
+      const options = {
+        method: method,
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 15000 // 15 seconds timeout
+      };
+      
+      console.log(`Making native ${method} request to ${url}`);
+      
+      const req = httpModule.request(url, options, (res) => {
+        let data = '';
+        
+        // Log response info
+        console.log(`Native request status: ${res.statusCode}`);
+        
+        // Handle response data
+        res.on('data', (chunk) => {
+          data += chunk;
+        });
+        
+        // When the response is complete
+        res.on('end', () => {
+          // Check if we got a successful status code
+          if (res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              // Try to parse as JSON
+              const parsedData = JSON.parse(data);
+              resolve(parsedData);
+            } catch (e) {
+              console.warn(`Failed to parse response as JSON: ${e.message}`);
+              // If we can't parse as JSON, resolve with the raw data
+              resolve({
+                rawData: data,
+                statusCode: res.statusCode,
+                headers: res.headers
+              });
+            }
+          } else {
+            // Handle error status codes
+            reject(new Error(`Request failed with status code ${res.statusCode}: ${data}`));
+          }
+        });
+      });
+      
+      // Handle request errors
+      req.on('error', (error) => {
+        console.error('Native request error:', error.message);
+        reject(error);
+      });
+      
+      // Handle timeouts
+      req.on('timeout', () => {
+        req.destroy();
+        reject(new Error('Request timed out'));
+      });
+      
+      // Send the request data if provided
+      if (requestData) {
+        const dataString = typeof requestData === 'string' ? 
+          requestData : JSON.stringify(requestData);
+        req.write(dataString);
+      }
+      
+      // End the request
+      req.end();
+      
+    } catch (error) {
+      console.error('Error in native request setup:', error.message);
+      reject(error);
+    }
+  });
+};
+
 // --- Django API Helper Functions ---
-const apiRequest = async (endpoint, method = 'GET', data = null) => {
+const apiRequest = async (endpoint, method = 'GET', data = null, retries = 3) => {
   try {
+    console.log(`Making ${method} request to ${DJANGO_BASE_URL}${endpoint}`);
+    
     const config = {
       method,
       url: `${DJANGO_BASE_URL}${endpoint}`,
       headers: {
         'Content-Type': 'application/json',
+      },
+      // Add timeout to prevent hanging requests
+      timeout: 10000, // 10 seconds
+      // Prevent automatic parsing of response if it might be malformed
+      transformResponse: [(data) => {
+        try {
+          // Try to parse as JSON
+          return JSON.parse(data);
+        } catch (e) {
+          // If parsing fails, return the raw data for manual handling
+          console.warn(`Failed to parse response as JSON: ${e.message}`);
+          return { rawData: data, parseError: e.message };
+        }
+      }],
+      // Validate status to ensure we handle all non-2xx responses
+      validateStatus: (status) => {
+        return status >= 200 && status < 300; // default
       }
     };
     
@@ -34,40 +137,245 @@ const apiRequest = async (endpoint, method = 'GET', data = null) => {
     }
     
     const response = await axios(config);
+    
+    // Check if we got a valid response
+    if (response.data && response.data.parseError) {
+      throw new Error(`Invalid response format: ${response.data.parseError}`);
+    }
+    
     return response.data;
   } catch (error) {
-    console.error(`API Request Error (${endpoint}):`, error.response?.data || error.message);
+    // Log detailed error information
+    console.error(`API Request Error (${endpoint}):`, {
+      message: error.message,
+      code: error.code,
+      url: `${DJANGO_BASE_URL}${endpoint}`,
+      method,
+      responseData: error.response?.data,
+      responseStatus: error.response?.status,
+      responseHeaders: error.response?.headers
+    });
+    
+    // Handle specific error types
+    if (error.code === 'ERR_BAD_RESPONSE') {
+      console.log('Received ERR_BAD_RESPONSE - trying native request as fallback');
+      
+      try {
+        // Try using the native request function as a fallback
+        const nativeResponse = await makeNativeRequest(
+          `${DJANGO_BASE_URL}${endpoint}`,
+          method,
+          data
+        );
+        console.log('Native request successful');
+        return nativeResponse;
+      } catch (nativeError) {
+        console.error('Native request also failed:', nativeError.message);
+        
+        // If native request also fails and we have retries left, try again with axios
+        if (retries > 0) {
+          console.log(`Retrying request with axios (${retries} attempts left)...`);
+          // Wait for a short time before retrying
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          return apiRequest(endpoint, method, data, retries - 1);
+        }
+      }
+    } else if (retries > 0) {
+      // For other errors, retry with axios if we have retries left
+      console.log(`Retrying request (${retries} attempts left)...`);
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      return apiRequest(endpoint, method, data, retries - 1);
+    }
+    
+    // For ECONNREFUSED errors, provide more helpful message
+    if (error.code === 'ECONNREFUSED') {
+      console.error(`Connection refused to ${DJANGO_BASE_URL}. Is the backend server running?`);
+    }
+    
     throw error;
   }
 };
 
 // Session management with Django backend
 const getUserSession = async (phoneNumber) => {
+  // Add specific debugging for this endpoint
+  console.log(`=== Getting session for ${phoneNumber} ===`);
+  console.log(`Backend URL: ${DJANGO_BASE_URL}/whatsapp-session/${phoneNumber}/`);
+  
+  // First try a direct request with more detailed error handling
   try {
-    console.log(`Getting session for ${phoneNumber}`);
-    const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`);
-    return session;
-  } catch (error) {
-    if (error.response?.status === 404) {
+    // Try a direct request with raw response handling
+    const directResponse = await axios({
+      method: 'GET',
+      url: `${DJANGO_BASE_URL}/whatsapp-session/${phoneNumber}/`,
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'application/json',
+        'User-Agent': 'WhatsAppBot/1.0'
+      },
+      timeout: 15000,
+      responseType: 'text', // Get raw text response to handle parsing manually
+      validateStatus: null // Don't throw on any status code
+    });
+    
+    // Log detailed response information
+    console.log(`Direct response status: ${directResponse.status}`);
+    console.log(`Response headers:`, directResponse.headers);
+    console.log(`Response size: ${directResponse.data?.length || 0} bytes`);
+    
+    // Check if response is valid
+    if (directResponse.status >= 200 && directResponse.status < 300) {
+      try {
+        // Try to parse the response as JSON
+        const sessionData = typeof directResponse.data === 'string' ? 
+          JSON.parse(directResponse.data) : directResponse.data;
+        
+        // Validate session data
+        if (!sessionData || typeof sessionData !== 'object') {
+          console.warn(`Invalid session data format for ${phoneNumber}:`, sessionData);
+          return createDefaultSession(phoneNumber);
+        }
+        
+        console.log(`Successfully retrieved session for ${phoneNumber}`);
+        return sessionData;
+      } catch (parseError) {
+        console.error(`Error parsing session response: ${parseError.message}`);
+        console.error(`Response content: ${directResponse.data?.substring(0, 200)}...`);
+        return createDefaultSession(phoneNumber);
+      }
+    } else if (directResponse.status === 404) {
+      console.log(`No session found for ${phoneNumber}, creating new one`);
       // Create new session if not found
-      const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
-        current_step: 'start',
-        context_data: {}
-      });
-      return newSession;
+      try {
+        const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+          current_step: 'start',
+          context_data: {}
+        });
+        return newSession;
+      } catch (createError) {
+        console.error(`Failed to create new session for ${phoneNumber}:`, createError.message);
+        return createDefaultSession(phoneNumber);
+      }
+    } else {
+      // Other error status codes
+      console.error(`Error status ${directResponse.status} when getting session for ${phoneNumber}`);
+      throw new Error(`HTTP error ${directResponse.status}`);
     }
-    throw error;
+  } catch (directError) {
+    console.error(`Direct request error for ${phoneNumber}:`, directError.message);
+    
+    // Fall back to standard apiRequest with additional error handling
+    try {
+      console.log(`Falling back to standard apiRequest for ${phoneNumber}`);
+      const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`);
+      
+      // Validate session data
+      if (!session || typeof session !== 'object') {
+        console.warn(`Invalid session data received for ${phoneNumber}:`, session);
+        return createDefaultSession(phoneNumber);
+      }
+      
+      return session;
+    } catch (error) {
+      console.error(`Error getting session for ${phoneNumber}:`, error.message);
+      
+      // Handle specific error cases
+      if (error.response?.status === 404) {
+        console.log(`No session found for ${phoneNumber}, creating new one`);
+        // Create new session if not found
+        try {
+          const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+            current_step: 'start',
+            context_data: {}
+          });
+          return newSession;
+        } catch (createError) {
+          console.error(`Failed to create new session for ${phoneNumber}:`, createError.message);
+          return createDefaultSession(phoneNumber);
+        }
+      }
+      
+      // For ERR_BAD_RESPONSE or other critical errors, return a default session
+      if (error.code === 'ERR_BAD_RESPONSE' || error.code === 'ECONNREFUSED' || !error.response) {
+        console.warn(`Backend connection issue for ${phoneNumber}, using default session`);
+        return createDefaultSession(phoneNumber);
+      }
+      
+      // For other errors, still return a default session but log the full error
+      console.error('Full error object:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+      return createDefaultSession(phoneNumber);
+    }
   }
+};
+
+// Helper function to create a default session when backend is unavailable
+const createDefaultSession = (phoneNumber) => {
+  console.log(`Creating default fallback session for ${phoneNumber}`);
+  return {
+    phone_number: phoneNumber,
+    current_step: 'start',
+    context_data: {},
+    is_fallback: true, // Flag to indicate this is a fallback session
+    created_at: new Date().toISOString(),
+    updated_at: new Date().toISOString()
+  };
 };
 
 const updateUserSession = async (phoneNumber, updates) => {
   try {
     console.log(`Updating session for ${phoneNumber}`, updates);
     const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', updates);
+    
+    // Validate session data
+    if (!session || typeof session !== 'object') {
+      console.warn(`Invalid session data received when updating ${phoneNumber}:`, session);
+      // Return the updates as a fallback
+      return {
+        ...updates,
+        phone_number: phoneNumber,
+        is_fallback: true,
+        updated_at: new Date().toISOString()
+      };
+    }
+    
     return session;
   } catch (error) {
-    console.error('Error updating session:', error);
-    throw error;
+    console.error(`Error updating session for ${phoneNumber}:`, error.message);
+    
+    // For critical errors, return a session with the updates applied
+    // This ensures the bot can continue functioning even if the backend is having issues
+    if (error.code === 'ERR_BAD_RESPONSE' || error.code === 'ECONNREFUSED' || !error.response) {
+      console.warn(`Backend connection issue when updating session for ${phoneNumber}, using local fallback`);
+      // Get the current session first (which might be a fallback session)
+      try {
+        const currentSession = await getUserSession(phoneNumber);
+        return {
+          ...currentSession,
+          ...updates,
+          is_fallback: true,
+          updated_at: new Date().toISOString()
+        };
+      } catch (sessionError) {
+        // If we can't even get the current session, just return the updates
+        return {
+          ...updates,
+          phone_number: phoneNumber,
+          is_fallback: true,
+          updated_at: new Date().toISOString()
+        };
+      }
+    }
+    
+    // Log the full error for debugging
+    console.error('Full update error:', JSON.stringify(error, Object.getOwnPropertyNames(error)));
+    
+    // Return a fallback session with the updates
+    return {
+      ...updates,
+      phone_number: phoneNumber,
+      is_fallback: true,
+      updated_at: new Date().toISOString()
+    };
   }
 };
 
