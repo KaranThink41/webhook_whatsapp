@@ -1,0 +1,27 @@
+{
+    "name": "wbot",
+    "version": "1.0.0",
+    "description": "A WhatsApp bot for Browse medicines, uploading prescriptions, viewing cart, and placing orders using Node.js and Supabase.",
+    "main": "server.js",
+    "scripts": {
+      "start": "node server.js",
+      "dev": "nodemon server.js"
+    },
+    "keywords": [
+      "whatsapp-bot",
+      "nodejs",
+      "express",
+      "supabase",
+      "pharmacy",
+      "e-commerce"
+    ],
+    "author": "Yuvraj",
+    "dependencies": {
+      "axios": "^1.7.2",
+      "express": "^4.19.2",
+      "multer": "^1.4.5-lts.1"
+    },
+    "devDependencies": {
+      "nodemon": "^3.1.4"
+    }
+  }

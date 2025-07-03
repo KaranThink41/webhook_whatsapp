@@ -1,0 +1,53 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+.DS_Store
+
+# Environment variables
+.env
+.env.local
+.env.development
+.env.production
+.env.test
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+
+# OS generated files
+.DS_Store
+.vscode/        # VSCode settings (if not shared by team)
+*.sublime-project
+*.sublime-workspace
+
+# dotenv files (if your .env file is named differently or you have backups)
+.env.*.local
+.env.bak
+.env.save
+
+# Uploaded files (if stored locally, though your code uploads to Supabase)
+# This is more for local development artifacts
+uploads/
+tmp/
+temp/
+
+# Production build artifacts (if you were to compile/transpile later)
+dist/
+build/
+
+# IDE specific files
+.idea/          # JetBrains IDEs (IntelliJ, WebStorm, etc.)
+
+# NPM package manager cache
+.npm/
+
+# Yarn Plug'n'Play
+.pnp.js
+.pnp.cjs
+
+# Other common ignore patterns
+*.swp
+*.bak
