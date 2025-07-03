@@ -200,14 +200,14 @@ const apiRequest = async (endpoint, method = 'GET', data = null, retries = 3) =>
 const getUserSession = async (phoneNumber) => {
   // Add specific debugging for this endpoint
   console.log(`=== Getting session for ${phoneNumber} ===`);
-  console.log(`Backend URL: ${DJANGO_BASE_URL}/whatsapp-session/${phoneNumber}/`);
+  console.log(`Backend URL: ${DJANGO_BASE_URL}/api/whatsapp-session/${phoneNumber}/`);
   
   // First try a direct request with more detailed error handling
   try {
     // Try a direct request with raw response handling
     const directResponse = await axios({
       method: 'GET',
-      url: `${DJANGO_BASE_URL}/whatsapp-session/${phoneNumber}/`,
+      url: `${DJANGO_BASE_URL}/api/whatsapp-session/${phoneNumber}/`,
       headers: {
         'Content-Type': 'application/json',
         'Accept': 'application/json',
@@ -247,7 +247,7 @@ const getUserSession = async (phoneNumber) => {
       console.log(`No session found for ${phoneNumber}, creating new one`);
       // Create new session if not found
       try {
-        const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+        const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
           current_step: 'start',
           context_data: {}
         });
@@ -267,7 +267,7 @@ const getUserSession = async (phoneNumber) => {
     // Fall back to standard apiRequest with additional error handling
     try {
       console.log(`Falling back to standard apiRequest for ${phoneNumber}`);
-      const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`);
+      const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
       
       // Validate session data
       if (!session || typeof session !== 'object') {
@@ -284,7 +284,7 @@ const getUserSession = async (phoneNumber) => {
         console.log(`No session found for ${phoneNumber}, creating new one`);
         // Create new session if not found
         try {
-          const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+          const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
             current_step: 'start',
             context_data: {}
           });
@@ -324,7 +324,7 @@ const createDefaultSession = (phoneNumber) => {
 const updateUserSession = async (phoneNumber, updates) => {
   try {
     console.log(`Updating session for ${phoneNumber}`, updates);
-    const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', updates);
+    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', updates);
     
     // Validate session data
     if (!session || typeof session !== 'object') {
@@ -384,7 +384,7 @@ const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
   try {
     console.log(`Fetching customer data for ${phoneNumber}`);
     // Use the whatsapp-session endpoint instead of customers
-    const customer = await apiRequest(`/whatsapp-session/${phoneNumber}/`);
+    const customer = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
     
     // If customer data exists in the session, use it
     if (customer && customer.context_data && customer.context_data.customer_info) {
@@ -417,7 +417,7 @@ const getOrCreateCustomer = async (phoneNumber, additionalData = {}) => {
       };
       
       // Create a new session with customer data
-      const newSession = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+      const newSession = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
         current_step: 'start',
         context_data: {
           customer_info: customerData
@@ -513,7 +513,7 @@ const getUserOrders = async (phoneNumber) => {
     console.log(`Fetching orders for phone: ${phoneNumber}`);
     
     // Get user session which may contain order data in context
-    const session = await apiRequest(`/whatsapp-session/${phoneNumber}/`);
+    const session = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`);
     
     // Check if there are orders in the session context
     if (session && session.context_data && session.context_data.orders) {
@@ -577,7 +577,7 @@ const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) =>
     
     console.log('Creating order with data:', orderData);
     // Store order in the user's session context instead of dedicated order endpoint
-    const sessionUpdate = await apiRequest(`/whatsapp-session/${phoneNumber}/`, 'POST', {
+    const sessionUpdate = await apiRequest(`/api/whatsapp-session/${phoneNumber}/`, 'POST', {
       context_data: {
         orders: [orderData]
       }
