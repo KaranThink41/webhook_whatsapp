@@ -93,14 +93,10 @@ async function handleCheckoutWithPrescription(phoneNumber, session, prescription
       }
     });
     
-    // Clear cart after successful order but keep other context data
+    // Clear cart after successful order
     await updateUserSession(phoneNumber, {
-      current_step: 'order_confirmation',
-      context_data: {
-        ...session.context_data,
-        cart: [],
-        last_order: order
-      }
+      current_step: 'browse_medicines',
+      context_data: { cart: [] }
     });
     
     // Send order confirmation
@@ -168,33 +164,32 @@ async function handleCheckoutWithPrescription(phoneNumber, session, prescription
 // Helper function for handling delivery details
 async function handleDeliveryDetails(phoneNumber, session) {
   try {
-    // Update session to reflect we're waiting for delivery details
-    const updatedSession = await updateUserSession(phoneNumber, {
+    // First, ensure we have a valid cart
+    if (!session.context_data.cart || session.context_data.cart.length === 0) {
+      await sendTextMessage(phoneNumber, "❌ Your cart is empty. Please add items before checkout.");
+      return;
+    }
+
+    // Update session to await delivery details
+    const updatedSession = {
+      ...session,
       current_step: 'awaiting_delivery_details',
       context_data: {
         ...session.context_data,
-        checkout_in_progress: true,
-        // Preserve existing cart and other important data
-        cart: session.context_data.cart || [],
-        customer_info: session.context_data.customer_info || { phone_number: phoneNumber },
-        // Track that we've shown the delivery instructions
-        delivery_instructions_shown: true
+        checkout_in_progress: true
       }
-    });
+    };
     
-    if (!updatedSession) {
-      throw new Error('Failed to update session');
-    }
+    await updateUserSession(phoneNumber, updatedSession);
     
     // Send delivery instructions
     await sendTextMessage(phoneNumber,
       "🚚 *Delivery Details*\n\n" +
       "Please provide your delivery details in the following format:\n\n" +
-      "*Full Name*\n" +
-      "*Complete Address* (House no, Building, Area)\n" +
-      "*City*\n" +
-      "*Pincode* (6 digits)\n" +
-      "*Landmark* (Optional)\n\n" +
+      "1. Full Name\n" +
+      "2. Complete Address\n" +
+      "3. Pincode\n" +
+      "4. Landmark (Optional)\n\n" +
       "*Example:*\n" +
       "John Doe\n" +
       "123 Main St, Apartment 4B\n" +
@@ -203,34 +198,19 @@ async function handleDeliveryDetails(phoneNumber, session) {
       "Near City Mall"
     );
     
-    // Add a small delay before sending the interactive message
-    await new Promise(resolve => setTimeout(resolve, 500));
-    
-    await sendInteractiveMessage(
-      phoneNumber, 
-      "Need help?", 
-      "You can also:", 
-      [
-        { id: "cancel_checkout", title: "❌ Cancel Checkout" },
-        { id: "show_cart", title: "🛒 View Cart" }
-      ]
-    );
+    // Add cancel option
+    await sendInteractiveMessage(phoneNumber, "Delivery Details", "You can also:", [
+      { id: "cancel_checkout", title: "❌ Cancel Checkout" }
+    ]);
     
   } catch (error) {
     console.error('Error in handleDeliveryDetails:', error);
-    // Try to recover by sending an error message and resetting to a known state
-    await sendTextMessage(phoneNumber, 
-      "❌ Sorry, there was an error processing your request. " +
-      "Please try again or contact support if the problem persists."
-    );
+    await sendTextMessage(phoneNumber, "❌ An error occurred. Please try again.");
     
-    // Reset to main menu to prevent getting stuck
+    // Reset to browse mode on error
     await updateUserSession(phoneNumber, {
-      current_step: 'main_menu',
-      context_data: {
-        ...session.context_data,
-        checkout_in_progress: false
-      }
+      current_step: 'browse_medicines',
+      context_data: { ...session.context_data, checkout_in_progress: false }
     });
   }
 }

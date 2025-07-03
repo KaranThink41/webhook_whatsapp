@@ -190,7 +190,19 @@ const handleIncomingMessage = async (from, message) => {
     }
     
     // Handle delivery details input
-    if (session.current_step === 'awaiting_delivery_details' && messageText !== 'cancel_checkout') {
+    if (session.current_step === 'awaiting_delivery_details') {
+      if (messageText === 'cancel_checkout') {
+        await updateUserSession(from, {
+          current_step: 'browse_medicines',
+          context_data: {
+            ...session.context_data,
+            checkout_in_progress: false
+          }
+        });
+        await sendTextMessage(from, "❌ Checkout cancelled. Your cart has been saved.");
+        return;
+      }
+
       // Process delivery details
       const details = messageText.split('\n').map(line => line.trim()).filter(line => line);
       
@@ -207,96 +219,56 @@ const handleIncomingMessage = async (from, message) => {
         );
         return;
       }
-      
-      // Extract name (first line)
-      const name = details[0].replace(/^\d+\.\s*/, '');
-      
-      // Initialize variables
-      let pincode = '';
-      let city = '';
-      let addressLines = [];
-      let landmark = '';
-      
-      // Try to find pincode (6-digit number) in the message
+
+      // Extract delivery details
+      const [name, ...addressParts] = details;
       const pincodeMatch = messageText.match(/\b(\d{6})\b/);
-      if (pincodeMatch) {
-        pincode = pincodeMatch[1];
-        
-        // Remove pincode from the message for further processing
-        const messageWithoutPincode = messageText.replace(pincode, '');
-        const detailsWithoutPincode = messageWithoutPincode.split('\n').map(line => line.trim()).filter(line => line);
-        
-        // The first line is the name
-        // The rest are address lines, city, and landmark
-        if (detailsWithoutPincode.length >= 3) {
-          // First line is name (already captured)
-          // Next lines are address lines and city
-          city = detailsWithoutPincode[detailsWithoutPincode.length - 2]; // Second last line is city
-          addressLines = detailsWithoutPincode.slice(1, -2); // All lines between name and city are address
-          landmark = detailsWithoutPincode[detailsWithoutPincode.length - 1]; // Last line is landmark (optional)
-        } else {
-          // Fallback if we can't parse properly
-          city = detailsWithoutPincode[1] || '';
-          addressLines = detailsWithoutPincode.slice(2);
+      const pincode = pincodeMatch ? pincodeMatch[1] : '';
+      
+      // Remove pincode from address parts
+      const addressPartsWithoutPincode = addressParts.filter(part => !part.includes(pincode));
+      const address = addressPartsWithoutPincode.join('\n');
+      
+      // Update session with delivery details
+      await updateUserSession(from, {
+        current_step: 'confirm_order',
+        context_data: {
+          ...session.context_data,
+          delivery_details: {
+            name: name.replace(/^\d+\.\s*/, ''), // Clean up name
+            address,
+            pincode,
+            phone: from
+          },
+          checkout_in_progress: true
         }
-      } else {
-        // If no pincode found, use the last line as city and the rest as address
-        city = details[details.length - 1];
-        addressLines = details.slice(1, -1);
-      }
-      
-      // Validate required fields
-      if (!pincode || !city || addressLines.length === 0) {
-        await sendTextMessage(from, 
-          "❌ Please provide a complete address including:\n" +
-          "- Full name\n" +
-          "- Complete address\n" +
-          "- City\n" +
-          "- 6-digit pincode\n" +
-          "- Landmark (optional)\n\n" +
-          "*Example:*\n" +
-          "John Doe\n" +
-          "123 Main Street, Apartment 4B\n" +
-          "New Delhi\n" +
-          "110001\n" +
-          "Near Central Park"
-        );
-        return;
-      }
-      
-      // Log the parsed address for debugging
-      console.log('Parsed address details:', {
-        name,
-        address: addressLines.join(', '),
-        city,
-        pincode,
-        landmark,
-        messageText // Log the original message for debugging
       });
       
-      console.log('Current session before update:', JSON.stringify(session, null, 2));
+      // Show order summary for confirmation
+      const cart = session.context_data.cart || [];
+      let orderSummary = "📋 *Order Summary*\n\n";
+      let total = 0;
       
-      try {
-        // Update customer with address
-        const customer = await getOrCreateCustomer(from, {
-          name: name,
-          address: addressLines.join(', '),
-          city: city,
-          pincode: pincode,
-          landmark: landmark
-        });
-        
-        console.log('Customer updated successfully:', customer);
-        
-        // Proceed with order creation
-        await handleCheckoutWithPrescription(from, session, null);
-        
-      } catch (error) {
-        console.error('Error updating customer address:', error);
-        await sendTextMessage(from, 
-          "❌ Failed to save your address. Please try again or contact support if the problem persists."
-        );
-      }
+      cart.forEach(item => {
+        const itemTotal = item.price * item.quantity;
+        total += itemTotal;
+        orderSummary += `• ${item.name} x${item.quantity} = ₹${itemTotal.toFixed(2)}\n`;
+      });
+      
+      orderSummary += `\n💵 *Total: ₹${total.toFixed(2)}*\n\n`;
+      orderSummary += `🏠 *Delivery Address*\n${name.replace(/^\d+\.\s*/, '')}\n${address}\n${pincode}\n\n`;
+      
+      await sendTextMessage(from, orderSummary);
+      await sendInteractiveMessage(
+        from,
+        "Confirm Order",
+        "Please confirm your order:",
+        [
+          { id: "confirm_order", title: "✅ Confirm Order" },
+          { id: "edit_address", title: "✏️ Edit Address" },
+          { id: "cancel_checkout", title: "❌ Cancel" }
+        ]
+      );
       return;
     }
     
