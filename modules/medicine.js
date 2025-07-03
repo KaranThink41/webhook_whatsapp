@@ -349,53 +349,33 @@ const handleClearCart = async (from) => {
 };
 
 const handleCheckout = async (from, session) => {
-  try {
-    const cart = session.context_data?.cart || [];
-    
-    if (cart.length === 0) {
-      await sendTextMessage(from, "❌ Your cart is empty. Add some medicines first!");
-      return;
-    }
-    
-    // Update session to mark checkout in progress
-    const updatedSession = {
-      ...session,
+  const cart = session.context_data.cart || [];
+  
+  if (cart.length === 0) {
+    await sendTextMessage(from, "Your cart is empty. Add some medicines first!");
+    return;
+  }
+  
+  // Check if any items require prescription
+  const requiresPrescription = cart.some(item => item.requires_prescription);
+  
+  if (requiresPrescription) {
+    // Store cart in session and ask for prescription
+    await updateUserSession(from, {
+      current_step: 'awaiting_prescription_checkout',
       context_data: {
         ...session.context_data,
         checkout_in_progress: true
       }
-    };
-    
-    await updateUserSession(from, updatedSession);
-    
-    // Check if any items require prescription
-    const requiresPrescription = cart.some(item => item.requires_prescription);
-    
-    if (requiresPrescription) {
-      // Update session to await prescription
-      await updateUserSession(from, {
-        ...updatedSession,
-        current_step: 'awaiting_prescription_checkout'
-      });
-      
-      await sendTextMessage(from, 
-        "📋 *Prescription Required*\n\n" +
-        "Some items in your cart require a prescription. " +
-        "Please upload a clear photo of your prescription to proceed with checkout."
-      );
-    } else {
-      // Proceed directly to delivery details
-      await handleDeliveryDetails(from, updatedSession);
-    }
-  } catch (error) {
-    console.error('Error in handleCheckout:', error);
-    await sendTextMessage(from, "❌ An error occurred while processing your checkout. Please try again.");
-    
-    // Reset to browse mode on error
-    await updateUserSession(from, {
-      current_step: 'browse_medicines',
-      context_data: { ...session.context_data, checkout_in_progress: false }
     });
+    
+    await sendTextMessage(from, 
+      "📋 Some items in your cart require a prescription. " +
+      "Please upload a clear photo of your prescription to proceed with checkout."
+    );
+  } else {
+    // Proceed to delivery details
+    await handleDeliveryDetails(from, session);
   }
 };
 

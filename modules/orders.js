@@ -163,56 +163,31 @@ async function handleCheckoutWithPrescription(phoneNumber, session, prescription
 
 // Helper function for handling delivery details
 async function handleDeliveryDetails(phoneNumber, session) {
-  try {
-    // First, ensure we have a valid cart
-    if (!session.context_data.cart || session.context_data.cart.length === 0) {
-      await sendTextMessage(phoneNumber, "❌ Your cart is empty. Please add items before checkout.");
-      return;
+  await updateUserSession(phoneNumber, {
+    current_step: 'awaiting_delivery_details',
+    context_data: {
+      ...session.context_data,
+      checkout_in_progress: true
     }
-
-    // Update session to await delivery details
-    const updatedSession = {
-      ...session,
-      current_step: 'awaiting_delivery_details',
-      context_data: {
-        ...session.context_data,
-        checkout_in_progress: true
-      }
-    };
-    
-    await updateUserSession(phoneNumber, updatedSession);
-    
-    // Send delivery instructions
-    await sendTextMessage(phoneNumber,
-      "🚚 *Delivery Details*\n\n" +
-      "Please provide your delivery details in the following format:\n\n" +
-      "1. Full Name\n" +
-      "2. Complete Address\n" +
-      "3. Pincode\n" +
-      "4. Landmark (Optional)\n\n" +
-      "*Example:*\n" +
-      "John Doe\n" +
-      "123 Main St, Apartment 4B\n" +
-      "New Delhi\n" +
-      "110001\n" +
-      "Near City Mall"
-    );
-    
-    // Add cancel option
-    await sendInteractiveMessage(phoneNumber, "Delivery Details", "You can also:", [
-      { id: "cancel_checkout", title: "❌ Cancel Checkout" }
-    ]);
-    
-  } catch (error) {
-    console.error('Error in handleDeliveryDetails:', error);
-    await sendTextMessage(phoneNumber, "❌ An error occurred. Please try again.");
-    
-    // Reset to browse mode on error
-    await updateUserSession(phoneNumber, {
-      current_step: 'browse_medicines',
-      context_data: { ...session.context_data, checkout_in_progress: false }
-    });
-  }
+  });
+  
+  await sendTextMessage(phoneNumber,
+    "🚚 *Delivery Details*\n\n" +
+    "Please provide your delivery details in the following format:\n\n" +
+    "1. Full Name\n" +
+    "2. Complete Address\n" +
+    "3. Pincode\n" +
+    "4. Landmark (Optional)\n\n" +
+    "Example:\n" +
+    "John Doe\n" +
+    "123 Main St, Apartment 4B\n" +
+    "400001\n" +
+    "Near City Mall"
+  );
+  
+  await sendInteractiveMessage(phoneNumber, "Delivery Details", "You can also:", [
+    { id: "cancel_checkout", title: "❌ Cancel Checkout" }
+  ]);
 }
 
 // Handle order tracking

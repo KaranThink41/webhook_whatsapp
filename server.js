@@ -190,19 +190,7 @@ const handleIncomingMessage = async (from, message) => {
     }
     
     // Handle delivery details input
-    if (session.current_step === 'awaiting_delivery_details') {
-      if (messageText === 'cancel_checkout') {
-        await updateUserSession(from, {
-          current_step: 'browse_medicines',
-          context_data: {
-            ...session.context_data,
-            checkout_in_progress: false
-          }
-        });
-        await sendTextMessage(from, "❌ Checkout cancelled. Your cart has been saved.");
-        return;
-      }
-
+    if (session.current_step === 'awaiting_delivery_details' && messageText !== 'cancel_checkout') {
       // Process delivery details
       const details = messageText.split('\n').map(line => line.trim()).filter(line => line);
       
@@ -219,56 +207,174 @@ const handleIncomingMessage = async (from, message) => {
         );
         return;
       }
-
-      // Extract delivery details
-      const [name, ...addressParts] = details;
+      
+      // Extract name (first line)
+      const name = details[0].replace(/^\d+\.\s*/, '');
+      
+      // Initialize variables
+      let pincode = '';
+      let city = '';
+      let addressLines = [];
+      let landmark = '';
+      
+      // Try to find pincode (6-digit number) in the message
       const pincodeMatch = messageText.match(/\b(\d{6})\b/);
-      const pincode = pincodeMatch ? pincodeMatch[1] : '';
+      if (pincodeMatch) {
+        pincode = pincodeMatch[1];
+        
+        // Remove pincode from the message for further processing
+        const messageWithoutPincode = messageText.replace(pincode, '');
+        const detailsWithoutPincode = messageWithoutPincode.split('\n').map(line => line.trim()).filter(line => line);
+        
+        if (detailsWithoutPincode.length >= 3) {
+          city = detailsWithoutPincode[detailsWithoutPincode.length - 2];
+          addressLines = detailsWithoutPincode.slice(1, -2);
+          landmark = detailsWithoutPincode[detailsWithoutPincode.length - 1];
+        } else {
+          city = detailsWithoutPincode[1] || '';
+          addressLines = detailsWithoutPincode.slice(2);
+        }
+      } else {
+        city = details[details.length - 1];
+        addressLines = details.slice(1, -1);
+      }
       
-      // Remove pincode from address parts
-      const addressPartsWithoutPincode = addressParts.filter(part => !part.includes(pincode));
-      const address = addressPartsWithoutPincode.join('\n');
+      // Validate required fields
+      if (!pincode || !city || addressLines.length === 0) {
+        await sendTextMessage(from, 
+          "❌ Please provide a complete address including:\n" +
+          "- Full name\n" +
+          "- Complete address\n" +
+          "- City\n" +
+          "- 6-digit pincode\n" +
+          "- Landmark (optional)\n\n" +
+          "*Example:*\n" +
+          "John Doe\n" +
+          "123 Main Street, Apartment 4B\n" +
+          "New Delhi\n" +
+          "110001\n" +
+          "Near Central Park"
+        );
+        return;
+      }
       
-      // Update session with delivery details
-      await updateUserSession(from, {
-        current_step: 'confirm_order',
+      // Format the address for display
+      const formattedAddress = `*Delivery Address*\n` +
+        `👤 ${name}\n` +
+        `📍 ${addressLines.join(', ')}\n` +
+        `🏙️ ${city} - ${pincode}\n` +
+        (landmark ? `📍 Landmark: ${landmark}\n` : '');
+      
+      // Update session with the parsed address for confirmation
+      const updatedSession = {
+        current_step: 'confirm_delivery_address',
         context_data: {
           ...session.context_data,
-          delivery_details: {
-            name: name.replace(/^\d+\.\s*/, ''), // Clean up name
-            address,
+          delivery_address: {
+            name,
+            address: addressLines.join(', '),
+            city,
             pincode,
-            phone: from
-          },
-          checkout_in_progress: true
+            landmark
+          }
         }
-      });
+      };
       
-      // Show order summary for confirmation
-      const cart = session.context_data.cart || [];
-      let orderSummary = "📋 *Order Summary*\n\n";
-      let total = 0;
+      // Save the session
+      await updateUserSession(from, updatedSession);
       
-      cart.forEach(item => {
-        const itemTotal = item.price * item.quantity;
-        total += itemTotal;
-        orderSummary += `• ${item.name} x${item.quantity} = ₹${itemTotal.toFixed(2)}\n`;
-      });
-      
-      orderSummary += `\n💵 *Total: ₹${total.toFixed(2)}*\n\n`;
-      orderSummary += `🏠 *Delivery Address*\n${name.replace(/^\d+\.\s*/, '')}\n${address}\n${pincode}\n\n`;
-      
-      await sendTextMessage(from, orderSummary);
-      await sendInteractiveMessage(
-        from,
-        "Confirm Order",
-        "Please confirm your order:",
-        [
-          { id: "confirm_order", title: "✅ Confirm Order" },
-          { id: "edit_address", title: "✏️ Edit Address" },
-          { id: "cancel_checkout", title: "❌ Cancel" }
-        ]
+      // Ask for confirmation
+      await sendTextMessage(from, 
+        `📦 *Please confirm your delivery address*\n\n` +
+        formattedAddress +
+        `\nIs this address correct?`
       );
+      
+      // Send confirmation buttons
+      await sendInteractiveMessage(from, "Confirm Address", "Is this address correct?", [
+        { id: "confirm_address_yes", title: "✅ Yes, Proceed" },
+        { id: "confirm_address_edit", title: "✏️ Edit Address" }
+      ]);
+      return;
+    }
+    
+    // Handle address confirmation
+    if (session.current_step === 'confirm_delivery_address') {
+      try {
+        if (message.interactive?.button_reply?.id === 'confirm_address_yes' || messageText.toLowerCase() === 'yes') {
+          const { name, address, city, pincode, landmark } = session.context_data.delivery_address;
+          
+          // Update customer with address
+          const customer = await getOrCreateCustomer(from, {
+            name,
+            address,
+            city,
+            pincode,
+            landmark
+          });
+          
+          console.log('Customer updated successfully:', customer);
+          
+          // Update session for payment processing
+          const updatedSession = {
+            current_step: 'processing_payment',
+            context_data: {
+              ...session.context_data,
+              customer_info: {
+                ...(session.context_data.customer_info || {}),
+                name,
+                address,
+                city,
+                pincode,
+                landmark
+              }
+            }
+          };
+          
+          await updateUserSession(from, updatedSession);
+          
+          // Proceed with order creation
+          await handleCheckoutWithPrescription(from, updatedSession, null);
+          
+        } else if (message.interactive?.button_reply?.id === 'confirm_address_edit' || messageText.toLowerCase() === 'edit') {
+          // Go back to address input
+          await updateUserSession(from, {
+            current_step: 'awaiting_delivery_details',
+            context_data: session.context_data
+          });
+          
+          await sendTextMessage(from,
+            "✏️ Please enter your delivery details again in this format:\n\n" +
+            "*Example:*\n" +
+            "John Doe\n" +
+            "123 Main Street, Apartment 4B\n" +
+            "New Delhi\n" +
+            "110001\n" +
+            "Near Central Park (optional)"
+          );
+        } else {
+          // If user sends any other message, ask for confirmation again
+          await sendTextMessage(from, 
+            "Please confirm your address by selecting one of the options below:"
+          );
+          
+          await sendInteractiveMessage(from, "Confirm Address", "Is your address correct?", [
+            { id: "confirm_address_yes", title: "✅ Yes, Proceed" },
+            { id: "confirm_address_edit", title: "✏️ Edit Address" }
+          ]);
+        }
+      } catch (error) {
+        console.error('Error in address confirmation:', error);
+        await updateUserSession(from, {
+          current_step: 'awaiting_delivery_details',
+          context_data: session.context_data
+        });
+        
+        await sendTextMessage(from, 
+          "❌ There was an error processing your request. Please try again with your delivery details.\n\n" +
+          "Please include:\n- Full name\n- Complete address\n- City\n- 6-digit pincode\n- Landmark (optional)"
+        );
+      }
       return;
     }
     
