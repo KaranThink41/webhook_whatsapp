@@ -15,7 +15,7 @@ app.use(express.urlencoded({ extended: true }));
 const WHATSAPP_TOKEN = process.env.WHATSAPP_TOKEN || 'your_whatsapp_access_token';
 const WHATSAPP_PHONE_NUMBER_ID = process.env.WHATSAPP_PHONE_NUMBER_ID || 'your_phone_number_id';
 const WEBHOOK_VERIFY_TOKEN = process.env.WEBHOOK_VERIFY_TOKEN || 'WkLp!9x#Zq7$Hj2@Mv_d';
-const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL || 'http://localhost:8000/api/pharmacy';
+const DJANGO_BASE_URL = process.env.DJANGO_BASE_URL;
 const WHATSAPP_API_URL = `https://graph.facebook.com/v18.0/${WHATSAPP_PHONE_NUMBER_ID}/messages`;
 
 // --- Django API Helper Functions ---
