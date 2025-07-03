@@ -298,17 +298,27 @@ const handleViewCart = async (from, session) => {
 
 const handleAddToCart = async (from, medicine, session) => {
   const cart = session.context_data.cart || [];
-  const existingItem = cart.find(item => item.id === medicine.id);
+  
+  // Normalize the medicine ID field (it might be id or medicine_id)
+  const medicineId = medicine.id || medicine.medicine_id;
+  
+  // Find existing item by either id or medicine_id
+  const existingItem = cart.find(item => 
+    (item.id === medicineId) || (item.medicine_id === medicineId)
+  );
   
   if (existingItem) {
     existingItem.quantity += 1;
   } else {
+    // Create a consistent item structure
     cart.push({
-      id: medicine.id,
+      id: medicineId,
+      medicine_id: medicineId,  // Include both for backward compatibility
       name: medicine.name,
-      price: medicine.price,
+      price: medicine.price || '0.00',
       quantity: 1,
-      requires_prescription: medicine.prescription_type === 'RX'
+      requires_prescription: medicine.requires_prescription || medicine.prescription_type === 'RX',
+      prescription_type: medicine.prescription_type || (medicine.requires_prescription ? 'RX' : 'OTC')
     });
   }
   
@@ -341,7 +351,7 @@ const handleClearCart = async (from) => {
   });
   
   await sendTextMessage(from, "🛒 Your cart has been cleared.");
-  await sendInteractiveMessage(from, "What would you like to do?", "", [
+  await sendInteractiveMessage(from, "What would you like to do next?", "Please select an option from the menu below:", [
     { id: "browse_categories", title: "Browse Categories" },
     { id: "search_medicines", title: "Search Medicines" },
     { id: "main_menu", title: "Main Menu" }
@@ -360,11 +370,31 @@ const handleCheckout = async (from, session) => {
   
   // Check if any item requires prescription
   const requiresPrescription = cart.some(item => {
-    console.log(`Item ${item.name} - requires_prescription: ${item.requires_prescription}, prescription_type: ${item.prescription_type}`);
-    return item.requires_prescription === true || item.prescription_type === 'RX';
+    // Check both possible properties for prescription requirement
+    const needsPrescription = 
+      item.requires_prescription === true || 
+      item.prescription_type === 'RX' ||
+      (item.prescription_type && item.prescription_type.toUpperCase() === 'RX');
+      
+    console.log(`Item ${item.name || 'Unknown'} - ` +
+      `requires_prescription: ${item.requires_prescription}, ` +
+      `prescription_type: ${item.prescription_type}, ` +
+      `needs_prescription: ${needsPrescription}`);
+      
+    return needsPrescription;
   });
   
   console.log('Requires prescription check:', requiresPrescription);
+  
+  // Debug: Log cart items that require prescription
+  if (requiresPrescription) {
+    const itemsNeedingPrescription = cart.filter(item => 
+      item.requires_prescription === true || 
+      (item.prescription_type && item.prescription_type.toUpperCase() === 'RX')
+    );
+    console.log('Items requiring prescription:', 
+      itemsNeedingPrescription.map(i => `${i.name} (ID: ${i.id || i.medicine_id})`).join(', '));
+  }
   
   if (requiresPrescription) {
     // Store cart in session and ask for prescription
