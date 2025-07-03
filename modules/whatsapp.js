@@ -1,4 +1,5 @@
 // server.js - WhatsApp related functions section
+const axios = require('axios');
 
 const { 
   WHATSAPP_TOKEN, 
