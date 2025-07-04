@@ -223,17 +223,40 @@ const handleIncomingMessage = async (from, message) => {
       
       // Process address lines
       if (details.length >= 3) {
-        // First line is name
-        // Last line might be landmark
+        // First line is name (already extracted)
+        // Last line might be landmark or pincode
         // Everything in between is address
-        addressLines = details.slice(1, -1);
-        landmark = details[details.length - 1];
         
-        // If pincode is in the last line, that line is not a landmark
-        if (details[details.length - 1].includes(pincode)) {
-          landmark = '';
+        // Try to find city (usually the line before pincode)
+        let city = '';
+        for (let i = 1; i < details.length - 1; i++) {
+          // If the next line is the pincode, this is likely the city
+          if (details[i+1].match(/^\d{5,6}$/)) {
+            city = details[i];
+            // Remove city from address lines
+            addressLines = details.slice(1, i).concat(details.slice(i+1, -1));
+            break;
+          }
         }
-      } else {
+        
+        // If we didn't find a city, use the first address line as city
+        if (!city && details.length > 3) {
+          city = details[1];
+          addressLines = details.slice(2, -1);
+        } else if (!city) {
+          city = details[1];
+          addressLines = [];
+        }
+        
+        // Last line could be landmark or pincode
+        const lastLine = details[details.length - 1];
+        if (lastLine.match(/^\d{5,6}$/)) {
+          pincode = lastLine; // Override pincode if it's in the last line
+        } else {
+          landmark = lastLine;
+        }
+      } else if (details.length === 2) {
+        // Only name and one other line - assume it's the address
         addressLines = [details[1]];
       }
       
@@ -263,13 +286,24 @@ const handleIncomingMessage = async (from, message) => {
       });
       
       try {
+        // Clean up the city name (remove any trailing numbers or special chars)
+        const cleanCity = city.replace(/[^a-zA-Z\s]/g, '').trim();
+        
         // Update customer with address
         const customer = await getOrCreateCustomer(from, {
           name: name,
           address: addressLines.join(', '),
-          city: addressLines[0], // Use first address line as city if needed
+          city: cleanCity,
           pincode: pincode,
           landmark: landmark
+        });
+        
+        console.log('Updated customer with address:', {
+          name,
+          address: addressLines.join(', '),
+          city: cleanCity,
+          pincode,
+          landmark
         });
         
         console.log('Customer updated successfully:', customer);
