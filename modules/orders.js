@@ -185,11 +185,13 @@ async function handleDeliveryDetails(phoneNumber, session) {
     "Please provide your delivery details in the following format:\n\n" +
     "1. Full Name\n" +
     "2. Complete Address\n" +
-    "3. Pincode\n" +
-    "4. Landmark (Optional)\n\n" +
+    "3. City\n" +
+    "4. Pincode\n" +
+    "5. Landmark (Optional)\n\n" +
     "Example:\n" +
     "John Doe\n" +
     "123 Main St, Apartment 4B\n" +
+    "Mumbai\n" +
     "400001\n" +
     "Near City Mall"
   );
