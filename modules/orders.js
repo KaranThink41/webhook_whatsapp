@@ -36,16 +36,7 @@ const createQuickOrder = async (phoneNumber, orderItems, additionalData = {}) =>
     
     // Get the first pharmacy based on delivery address
     const deliveryAddress = additionalData.delivery_address || {};
-    
-    // Make sure we're passing either city or pincode to the pharmacy API
-    const city = deliveryAddress.city || null;
-    const pincode = deliveryAddress.pincode || null;
-    
-    if (!city && !pincode) {
-      throw new Error('City or pincode is required to find a pharmacy');
-    }
-    
-    const pharmacies = await getNearbyPharmacies(city, pincode);
+    const pharmacies = await getNearbyPharmacies(deliveryAddress.city, deliveryAddress.pincode);
     const pharmacyId = pharmacies.length > 0 ? pharmacies[0].id : null;
     
     if (!pharmacyId) {
