@@ -212,6 +212,7 @@ const handleIncomingMessage = async (from, message) => {
       
       // Initialize variables
       let pincode = '';
+      let city = '';
       let addressLines = [];
       let landmark = '';
       
@@ -223,41 +224,52 @@ const handleIncomingMessage = async (from, message) => {
       
       // Process address lines
       if (details.length >= 3) {
-        // First line is name (already extracted)
-        // Last line might be landmark or pincode
-        // Everything in between is address
-        
-        // Try to find city (usually the line before pincode)
-        let city = '';
-        for (let i = 1; i < details.length - 1; i++) {
-          // If the next line is the pincode, this is likely the city
-          if (details[i+1].match(/^\d{5,6}$/)) {
-            city = details[i];
-            // Remove city from address lines
-            addressLines = details.slice(1, i).concat(details.slice(i+1, -1));
+        // First try to find pincode in any line
+        for (let i = 1; i < details.length; i++) {
+          const pincodeMatch = details[i].match(/^(\d{5,6})$/);
+          if (pincodeMatch) {
+            pincode = pincodeMatch[1];
+            // If pincode is not the last line, the line before it is likely the city
+            if (i > 1) {
+              city = details[i-1];
+              // Everything before city is address line 1
+              addressLines = [details[1]];
+              // Everything between city and pincode is address line 2
+              if (i > 2) {
+                addressLines = addressLines.concat(details.slice(2, i-1));
+              }
+              // Everything after pincode is landmark
+              if (i < details.length - 1) {
+                landmark = details.slice(i+1).join(', ');
+              }
+            } else {
+              // Pincode is the second line, so first line is name, second is pincode
+              addressLines = [];
+              city = details[1];
+              if (details.length > 2) {
+                landmark = details.slice(2).join(', ');
+              }
+            }
             break;
           }
         }
         
-        // If we didn't find a city, use the first address line as city
-        if (!city && details.length > 3) {
-          city = details[1];
-          addressLines = details.slice(2, -1);
-        } else if (!city) {
-          city = details[1];
-          addressLines = [];
-        }
-        
-        // Last line could be landmark or pincode
-        const lastLine = details[details.length - 1];
-        if (lastLine.match(/^\d{5,6}$/)) {
-          pincode = lastLine; // Override pincode if it's in the last line
-        } else {
-          landmark = lastLine;
+        // If we didn't find a pincode, make some reasonable assumptions
+        if (!pincode) {
+          // Second last line is city, last line is landmark
+          city = details[details.length - 2] || '';
+          addressLines = details.slice(1, -2);
+          landmark = details[details.length - 1] || '';
         }
       } else if (details.length === 2) {
         // Only name and one other line - assume it's the address
         addressLines = [details[1]];
+        // Try to extract pincode if it's in the address
+        const pincodeMatch = details[1].match(/(\d{5,6})/);
+        if (pincodeMatch) {
+          pincode = pincodeMatch[1];
+          city = details[1].replace(pincode, '').replace(/[^\w\s]/g, '').trim();
+        }
       }
       
       // Validate required fields - only name, address and pincode are mandatory
@@ -287,7 +299,16 @@ const handleIncomingMessage = async (from, message) => {
       
       try {
         // Clean up the city name (remove any trailing numbers or special chars)
-        const cleanCity = city.replace(/[^a-zA-Z\s]/g, '').trim();
+        const cleanCity = city ? city.replace(/[^a-zA-Z\s]/g, '').trim() : '';
+        
+        // Make sure we have required fields
+        if (!pincode) {
+          await sendTextMessage(from, 
+            "❌ Could not find a valid pincode in your address. " +
+            "Please include a 5 or 6 digit pincode in your address."
+          );
+          return;
+        }
         
         // Update customer with address
         const customer = await getOrCreateCustomer(from, {
